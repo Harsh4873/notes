@@ -1,0 +1,102 @@
+name: Deploy Notes to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Install Firebase CLI for rule tests
+        run: npm install --global firebase-tools@15.14.0
+
+      - name: Set up Java for Firestore emulator
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Test Firestore security rules
+        run: npm run test:rules
+
+      - name: Verify reviewed shared-rules hash
+        run: npm run check:rules-parity
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Validate Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/manifest.webmanifest
+          test -f dist/favicon.png
+          test -f dist/apple-touch-icon.png
+          test -f dist/icon-192.png
+          test -f dist/icon-512.png
+          test -f dist/icon-maskable-512.png
+          test -d dist/assets
+          find dist/assets -type f -name '*.js' -print -quit | grep -q .
+          find dist/assets -type f -name '*.css' -print -quit | grep -q .
+          grep -Fq 'src="/notes/assets/' dist/index.html
+          grep -Fq 'href="/notes/assets/' dist/index.html
+          grep -Fq 'href="/notes/manifest.webmanifest"' dist/index.html
+          grep -Fq 'href="/notes/favicon.png"' dist/index.html
+          grep -Fq 'href="/notes/apple-touch-icon.png"' dist/index.html
+          grep -Fq 'href="https://harsh.bet/notes/"' dist/index.html
+          grep -Fq '"start_url": "/notes/"' dist/manifest.webmanifest
+          grep -Fq '"scope": "/notes/"' dist/manifest.webmanifest
+          grep -Fq '"src": "/notes/icon-192.png"' dist/manifest.webmanifest
+          grep -Fq '"src": "/notes/icon-512.png"' dist/manifest.webmanifest
+          grep -Fq '"src": "/notes/icon-maskable-512.png"' dist/manifest.webmanifest
+          test ! -e CNAME
+          test ! -e dist/CNAME
+          touch dist/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

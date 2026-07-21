@@ -1,0 +1,10 @@
+node_modules/
+.npm-cache/
+dist/
+.DS_Store
+*.local
+AGENTS.md
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
