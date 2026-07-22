@@ -7,6 +7,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteField,
   doc,
   onSnapshot,
   runTransaction,
@@ -616,6 +617,75 @@ export function useNotesSync(): NotesSyncApi {
     }));
   }, [trackWrite]);
 
+  const setNoteTrashed = useCallback(async (
+    id: string,
+    trashed: boolean,
+    expectedRevision: number,
+  ) => {
+    const uid = activeUidRef.current;
+    if (!uid) throw new Error('Sign in before moving a note to Trash.');
+    assertRecordId(id, 'Note');
+    if (typeof trashed !== 'boolean') throw new Error('Trashed must be true or false.');
+    if (!isNoteRevision(expectedRevision)) {
+      throw new Error(`Note revision must be a whole number from 0 to ${MAX_NOTE_REVISION}.`);
+    }
+
+    const reference = doc(notesCollection(uid), id);
+    return trackWrite(runTransaction(notesFirestore, async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists()) throw new Error('This note no longer exists in the cloud.');
+
+      const current = parseNoteRecord(snapshot.data(), id);
+      if (!current) throw new Error('This cloud note has an unsupported format.');
+      if (current.revision !== expectedRevision) {
+        throw new NoteConflictError(id, expectedRevision, current.revision);
+      }
+      if (current.revision >= MAX_NOTE_REVISION) {
+        throw new Error('This note has reached its safe revision limit.');
+      }
+      if ((current.deleted === true) === trashed) return current.revision;
+
+      transaction.update(reference, {
+        // Restoring clears both fields so a restored note is indistinguishable
+        // from one that was never trashed, which is what the ruleset expects.
+        deleted: trashed ? true : deleteField(),
+        deletedAt: trashed ? serverTimestamp() : deleteField(),
+        revision: current.revision + 1,
+        updatedAt: serverTimestamp(),
+      });
+      return current.revision + 1;
+    }));
+  }, [trackWrite]);
+
+  const permanentlyDeleteNote = useCallback(async (
+    id: string,
+    expectedRevision: number,
+  ) => {
+    const uid = activeUidRef.current;
+    if (!uid) throw new Error('Sign in before permanently deleting a note.');
+    assertRecordId(id, 'Note');
+    if (!isNoteRevision(expectedRevision)) {
+      throw new Error(`Note revision must be a whole number from 0 to ${MAX_NOTE_REVISION}.`);
+    }
+
+    const reference = doc(notesCollection(uid), id);
+    await trackWrite(runTransaction(notesFirestore, async (transaction) => {
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists()) throw new Error('This note no longer exists in the cloud.');
+
+      const current = parseNoteRecord(snapshot.data(), id);
+      if (!current) throw new Error('This cloud note has an unsupported format.');
+      if (current.deleted !== true) {
+        throw new Error('Move this note to Trash before permanently deleting it.');
+      }
+      if (current.revision !== expectedRevision) {
+        throw new NoteConflictError(id, expectedRevision, current.revision);
+      }
+
+      transaction.delete(reference);
+    }));
+  }, [trackWrite]);
+
   const createFolder = useCallback(async (name: string) => {
     const uid = activeUidRef.current;
     if (!uid) throw new Error('Sign in before creating a folder.');
@@ -734,6 +804,8 @@ export function useNotesSync(): NotesSyncApi {
     signOut,
     createNote,
     updateNote,
+    setNoteTrashed,
+    permanentlyDeleteNote,
     createFolder,
     updateFolder,
     updateSettings,

@@ -466,40 +466,60 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
-    function isValidNotesNote(noteId) {
-      return request.resource.data.keys().hasAll([
+    function isTrashedNotesTombstone(noteData) {
+      return ('deleted' in noteData)
+        && noteData.deleted == true
+        && ('deletedAt' in noteData)
+        && noteData.deletedAt is timestamp;
+    }
+
+    // Notes uses a recoverable trash. A note is either untrashed (neither
+    // tombstone field present) or trashed (deleted == true with a timestamp).
+    // Restoring removes both fields again, so a restored note is byte-shaped
+    // exactly like one that was never trashed.
+    function isValidNotesTombstone(noteData) {
+      return (
+        !('deleted' in noteData)
+        && !('deletedAt' in noteData)
+      ) || isTrashedNotesTombstone(noteData);
+    }
+
+    function isValidNotesNote(noteData, noteId) {
+      return noteData.keys().hasAll([
           'id', 'title', 'content', 'contentText', 'richBackup', 'format',
           'folderId', 'labels', 'pinned', 'revision', 'createdAt', 'updatedAt'
         ])
-        && request.resource.data.keys().hasOnly([
+        && noteData.keys().hasOnly([
           'id', 'title', 'content', 'contentText', 'richBackup', 'format',
-          'folderId', 'labels', 'pinned', 'revision', 'createdAt', 'updatedAt'
+          'folderId', 'labels', 'pinned', 'revision', 'createdAt', 'updatedAt',
+          'deleted', 'deletedAt'
         ])
-        && request.resource.data.id == noteId
-        && isValidNotesId(request.resource.data.id)
-        && request.resource.data.title is string
-        && request.resource.data.title.size() <= 240
-        && request.resource.data.content is string
-        && request.resource.data.content.size() <= 600000
-        && request.resource.data.contentText is string
-        && request.resource.data.contentText.size() <= 200000
-        && request.resource.data.richBackup is string
-        && request.resource.data.richBackup.size() <= 600000
-        && request.resource.data.content.size()
-          + request.resource.data.contentText.size()
-          + request.resource.data.richBackup.size() <= 850000
-        && request.resource.data.format in ['rich', 'plain']
-        && request.resource.data.folderId is string
-        && request.resource.data.folderId.size() <= 128
+        && isValidNotesTombstone(noteData)
+        && noteData.id == noteId
+        && isValidNotesId(noteData.id)
+        && noteData.title is string
+        && noteData.title.size() <= 240
+        && noteData.content is string
+        && noteData.content.size() <= 600000
+        && noteData.contentText is string
+        && noteData.contentText.size() <= 200000
+        && noteData.richBackup is string
+        && noteData.richBackup.size() <= 600000
+        && noteData.content.size()
+          + noteData.contentText.size()
+          + noteData.richBackup.size() <= 850000
+        && noteData.format in ['rich', 'plain']
+        && noteData.folderId is string
+        && noteData.folderId.size() <= 128
         && (
-          request.resource.data.folderId.size() == 0
-          || isValidNotesId(request.resource.data.folderId)
+          noteData.folderId.size() == 0
+          || isValidNotesId(noteData.folderId)
         )
-        && isValidNotesLabels(request.resource.data.labels)
-        && request.resource.data.pinned is bool
-        && request.resource.data.revision is int
-        && request.resource.data.revision >= 0
-        && request.resource.data.revision <= 2147483647;
+        && isValidNotesLabels(noteData.labels)
+        && noteData.pinned is bool
+        && noteData.revision is int
+        && noteData.revision >= 0
+        && noteData.revision <= 2147483647;
     }
 
     function hasNotesCreateRevision() {
@@ -555,13 +575,18 @@ service cloud.firestore {
       match /notes/{noteId} {
         allow read: if ownsNotesData(userId);
         allow create: if ownsNotesData(userId)
-          && isValidNotesNote(noteId)
+          && isValidNotesNote(request.resource.data, noteId)
           && hasNotesCreateRevision()
           && hasNotesCreateTimestamps();
         allow update: if ownsNotesData(userId)
-          && isValidNotesNote(noteId)
+          && isValidNotesNote(request.resource.data, noteId)
           && hasNotesUpdateRevision()
           && hasNotesUpdateTimestamps();
+        // Permanent deletion is an explicit second step from Trash. Live or
+        // malformed notes cannot skip the tombstone transition.
+        allow delete: if ownsNotesData(userId)
+          && isValidNotesNote(resource.data, noteId)
+          && isTrashedNotesTombstone(resource.data);
       }
 
       match /folders/{folderId} {

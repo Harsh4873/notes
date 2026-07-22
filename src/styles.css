@@ -940,10 +940,49 @@ kbd {
   position: relative;
   width: 100%;
   min-height: 150px;
+  overflow: hidden;
   border-bottom: 1px solid var(--line);
-  background: transparent;
+  background: var(--danger);
   color: var(--ink);
-  transition: background-color 130ms ease;
+}
+
+.note-row-swipe-action {
+  position: absolute;
+  z-index: 0;
+  inset: 0 auto 0 0;
+  display: flex;
+  width: 104px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.note-row-swipe-action svg {
+  width: 20px;
+  height: 20px;
+}
+
+.note-row-foreground {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 150px;
+  background: var(--surface);
+  touch-action: pan-y;
+  transition: transform 180ms cubic-bezier(0.2, 0.75, 0.25, 1), background-color 130ms ease;
+}
+
+.note-row.is-gesture-active .note-row-foreground {
+  transition: none;
+  user-select: none;
+  -webkit-user-select: none;
+  will-change: transform;
 }
 
 .note-row-select {
@@ -959,16 +998,17 @@ kbd {
   text-align: left;
 }
 
-.note-row:hover {
+.note-row:hover .note-row-foreground {
   background: var(--surface-hover);
 }
 
-.note-row.is-selected {
+.note-row.is-selected .note-row-foreground {
   background: var(--surface-selected);
 }
 
-.note-row.is-selected::before {
+.note-row.is-selected .note-row-foreground::before {
   position: absolute;
+  z-index: 3;
   inset: 0 auto 0 0;
   width: 3px;
   background: var(--accent);
@@ -1023,10 +1063,19 @@ kbd {
   font-size: 10px;
 }
 
-.note-row-copy {
+.note-row-actions {
   position: absolute;
+  z-index: 2;
   right: 21px;
   bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 130ms ease;
+}
+
+.note-row-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1035,22 +1084,25 @@ kbd {
   border-radius: 6px;
   background: transparent;
   color: var(--ink-soft);
-  opacity: 0;
-  transition: background-color 130ms ease, color 130ms ease, opacity 130ms ease;
+  transition: background-color 130ms ease, color 130ms ease;
 }
 
-.note-row:hover .note-row-copy,
-.note-row:focus-within .note-row-copy,
-.note-row.is-selected .note-row-copy {
+.note-row:hover .note-row-actions,
+.note-row:focus-within .note-row-actions,
+.note-row.is-selected .note-row-actions {
   opacity: 1;
 }
 
-.note-row-copy:hover {
+.note-row-action:hover {
   background: var(--surface-strong);
   color: var(--ink);
 }
 
-.note-row-copy svg {
+.note-row-action.is-danger {
+  color: var(--danger);
+}
+
+.note-row-action svg {
   width: 14px;
   height: 14px;
 }
@@ -1116,6 +1168,12 @@ kbd {
   min-width: 0;
   min-height: 0;
   background: var(--surface-strong);
+}
+
+/* The Trash banner is a conditional fourth child, so the row template has to
+   grow with it or the label row would swallow the writing surface. */
+.editor-panel:has(.trash-banner) {
+  grid-template-rows: 69px auto auto minmax(0, 1fr);
 }
 
 .editor-meta-bar {
@@ -1235,6 +1293,74 @@ kbd {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.note-details-action {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.note-details-action svg {
+  width: 15px;
+  height: 15px;
+}
+
+.note-details-action.is-danger {
+  color: var(--danger);
+}
+
+.trash-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 10px auto 0;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.trash-banner > svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+}
+
+.trash-banner > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.trash-banner button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.trash-banner button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .editor-label-row {
@@ -1449,7 +1575,8 @@ kbd {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1479,6 +1606,15 @@ kbd {
 .secondary-button:hover {
   background: var(--surface-muted);
   color: var(--ink);
+}
+
+.danger-button {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.danger-button:hover:not(:disabled) {
+  filter: brightness(0.93);
 }
 
 .primary-button svg,
@@ -1522,12 +1658,14 @@ kbd {
 }
 
 .quick-capture-modal,
-.folder-modal {
+.folder-modal,
+.permanent-delete-modal {
   padding: 27px;
 }
 
 .quick-capture-modal > header,
-.folder-modal > header {
+.folder-modal > header,
+.permanent-delete-modal > header {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr) 40px;
   align-items: center;
@@ -1535,7 +1673,8 @@ kbd {
 }
 
 .quick-capture-modal h2,
-.folder-modal h2 {
+.folder-modal h2,
+.permanent-delete-modal h2 {
   margin: 2px 0 0;
   font-family: var(--font-editorial);
   font-size: 33px;
@@ -1558,6 +1697,11 @@ kbd {
 .modal-icon svg {
   width: 20px;
   height: 20px;
+}
+
+.modal-icon.is-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .quick-capture-modal > p {
@@ -1661,6 +1805,42 @@ kbd {
   margin-top: 27px;
 }
 
+.permanent-delete-modal {
+  width: 100%;
+}
+
+.modal-sheet:has(.permanent-delete-modal) {
+  width: min(100%, 520px);
+}
+
+.permanent-delete-modal > p {
+  margin: 22px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.permanent-delete-modal > p strong {
+  color: var(--ink);
+}
+
+.permanent-delete-modal > .permanent-delete-error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.permanent-delete-modal > footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 25px;
+}
+
 .toast {
   position: fixed;
   z-index: 150;
@@ -1683,6 +1863,19 @@ kbd {
 .toast svg {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+}
+
+.toast-action {
+  min-height: 30px;
+  margin-left: 3px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.18);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 @keyframes toast-in {
@@ -1823,7 +2016,7 @@ kbd {
     font-size: 34px;
   }
 
-  .note-row {
+  .note-row-select {
     padding-inline: 22px;
   }
 
@@ -1909,6 +2102,22 @@ kbd {
   .topbar .theme-button,
   .topbar .profile-button > svg {
     display: none;
+  }
+
+  /* iOS Safari zooms the entire page when a focused field computes under 16px,
+     and it will not zoom back out. Every typing surface stays at 16px here. */
+  .search-field input,
+  .label-popover input,
+  .folder-modal > input,
+  .quick-capture-modal textarea,
+  .rich-text-editor__link-popover input,
+  .rich-text-editor__surface--plain textarea {
+    font-size: 16px;
+  }
+
+  .label-popover input,
+  .rich-text-editor__link-popover input {
+    height: 42px;
   }
 
   .sync-pill {
@@ -2014,13 +2223,24 @@ kbd {
     min-height: 135px;
   }
 
+  .note-row-foreground {
+    min-height: 135px;
+  }
+
   .note-row-select {
     min-height: 135px;
     padding: 18px 20px;
   }
 
-  .note-row-copy {
+  .note-row-actions {
+    right: 14px;
+    bottom: 10px;
     opacity: 1;
+  }
+
+  .note-row-action {
+    width: 40px;
+    height: 40px;
   }
 
   .mobile-new-note {
@@ -2029,9 +2249,9 @@ kbd {
     bottom: 17px;
     display: inline-flex;
     align-items: center;
-    min-height: 45px;
+    min-height: 48px;
     gap: 7px;
-    padding: 0 15px;
+    padding: 0 16px;
     border-radius: 12px;
     background: var(--accent);
     box-shadow: var(--shadow-soft);
@@ -2052,6 +2272,10 @@ kbd {
     pointer-events: none;
     transform: translateX(9%);
     transition: transform 220ms ease, opacity 180ms ease;
+  }
+
+  .editor-panel:has(.trash-banner) {
+    grid-template-rows: 58px auto auto minmax(0, 1fr);
   }
 
   .mobile-pane-editor .editor-panel {
@@ -2088,10 +2312,6 @@ kbd {
     font-size: 0;
   }
 
-  .editor-actions .icon-button:last-child {
-    display: none;
-  }
-
   .editor-label-row {
     min-height: 38px;
     padding: 7px 16px 0;
@@ -2103,7 +2323,7 @@ kbd {
 
   .note-title-input {
     margin-top: 17px;
-    font-size: clamp(36px, 11vw, 47px);
+    font-size: clamp(28px, 8vw, 38px);
   }
 
   .mobile-bottom-nav {
@@ -2120,6 +2340,8 @@ kbd {
 
   .mobile-bottom-nav button {
     display: flex;
+    min-width: 0;
+    min-height: 53px;
     align-items: center;
     justify-content: center;
     flex-direction: column;
@@ -2127,7 +2349,27 @@ kbd {
     border-radius: 9px;
     background: transparent;
     color: var(--ink-faint);
-    font-size: 9px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* While the software keyboard is up it covers the fixed bottom bar anyway,
+     so drop the bar and give the writing surface the reclaimed height. */
+  .app-shell.keyboard-open {
+    padding-bottom: 0;
+  }
+
+  .app-shell.keyboard-open .mobile-bottom-nav {
+    display: none;
+  }
+
+  .app-shell.keyboard-open .note-list-panel,
+  .app-shell.keyboard-open .editor-panel {
+    bottom: 0;
+  }
+
+  .app-shell.keyboard-open .mobile-new-note {
+    display: none;
   }
 
   .mobile-bottom-nav button.is-active {
@@ -2190,28 +2432,30 @@ kbd {
   }
 
   .sync-pill {
-    width: 28px;
+    width: 32px;
     justify-content: center;
   }
 
   .profile-button > span {
-    width: 33px;
-    height: 33px;
+    width: 36px;
+    height: 36px;
     font-size: 11px;
   }
 
   .search-field {
+    height: 40px;
+  }
+
+  /* Controls stay at a thumb-sized target rather than shrinking with the
+     viewport; the row sheds labels instead of hit area. */
+  .copy-note-button,
+  .editor-actions .icon-button {
+    width: 38px;
     height: 38px;
   }
 
-  .search-field input {
-    font-size: 13px;
-  }
-
-  .copy-note-button,
-  .editor-actions .icon-button {
-    width: 34px;
-    height: 34px;
+  .editor-actions {
+    gap: 1px;
   }
 
   .modal-layer {
@@ -2227,7 +2471,8 @@ kbd {
   }
 
   .quick-capture-modal,
-  .folder-modal {
+  .folder-modal,
+  .permanent-delete-modal {
     padding: 22px 18px calc(22px + env(safe-area-inset-bottom));
   }
 
@@ -2266,6 +2511,29 @@ kbd {
 
   .auth-footnote {
     display: none;
+  }
+}
+
+/* Touch devices have no real hover, so a tapped control would otherwise keep
+   its hover styling until something else is tapped. */
+@media (hover: none) {
+  .nav-button:hover,
+  .label-nav-row:hover,
+  .icon-button:hover,
+  .note-row-action:hover {
+    background: inherit;
+  }
+
+  .note-row:hover .note-row-foreground {
+    background: var(--surface);
+  }
+
+  .note-row.is-selected .note-row-foreground {
+    background: var(--surface-selected);
+  }
+
+  .note-row-actions {
+    opacity: 1;
   }
 }
 
@@ -2863,13 +3131,27 @@ button.rich-text-editor__smart:hover {
     background: var(--surface-strong);
   }
 
+  /* The toolbar already scrolls horizontally, so on a phone it can afford
+     full-size touch targets instead of squeezing more icons into view. */
   .rich-text-editor__toolbar {
-    height: 43px;
+    height: 48px;
     border-radius: 9px;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .rich-text-editor__tool {
+    flex: 0 0 38px;
+    width: 38px;
+    height: 38px;
   }
 
   .rich-text-editor__mode-tools {
-    min-height: 29px;
+    min-height: 34px;
+  }
+
+  .rich-text-editor__mode-switch button {
+    min-height: 32px;
   }
 
   .rich-text-editor__smart {
@@ -2901,7 +3183,10 @@ button.rich-text-editor__smart:hover {
 }
 
 @media (max-width: 520px) {
-  .rich-text-editor__color-group,
+  /* Quote, code, code block and divider all live in the More menu, so hiding
+     them here loses nothing. Highlight and text colour do not, so only their
+     colour swatches fold away and the toggles themselves stay reachable. */
+  .rich-text-editor__swatch,
   .rich-text-editor__tool--advanced {
     display: none;
   }
@@ -2912,12 +3197,12 @@ button.rich-text-editor__smart:hover {
 
   .rich-text-editor__smart {
     max-width: 42%;
-    font-size: 9px;
+    font-size: 10px;
   }
 
   .rich-text-editor__mode-switch button {
-    padding-inline: 8px;
-    font-size: 9px;
+    padding-inline: 10px;
+    font-size: 10px;
   }
 
   .rich-text-editor__prose {

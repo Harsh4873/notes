@@ -10,8 +10,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check:rules-parity": "node scripts/check-shared-rules.mjs",
-    "test": "vitest run",
-    "test:rules": "firebase emulators:exec --project demo-notes --only firestore \"vitest run tests/firestore.rules.test.ts\"",
+    "test": "vitest run --exclude tests/firestore.rules.test.ts",
+    "test:rules": "firebase emulators:exec --project demo-notes --only firestore \"vitest run tests/firestore.rules.test.ts --testTimeout=20000\"",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },

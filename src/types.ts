@@ -16,6 +16,9 @@ export interface NoteRecord {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  /** Present only while the note sits in Trash. Restoring clears both fields. */
+  deleted?: true;
+  deletedAt?: string;
 }
 
 export interface FolderRecord {
@@ -84,6 +87,8 @@ export interface NotesSyncApi {
   signOut: () => Promise<void>;
   createNote: (input?: CreateNoteInput) => Promise<string>;
   updateNote: (id: string, patch: UpdateNotePatch, expectedRevision: number) => Promise<void>;
+  setNoteTrashed: (id: string, trashed: boolean, expectedRevision: number) => Promise<number>;
+  permanentlyDeleteNote: (id: string, expectedRevision: number) => Promise<void>;
   retrySync: () => void;
   createFolder: (name: string) => Promise<string>;
   updateFolder: (id: string, patch: UpdateFolderPatch) => Promise<void>;

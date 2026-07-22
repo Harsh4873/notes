@@ -266,7 +266,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     }));
   });
 
-  it('denies deletes for every Notes document type', async () => {
+  it('denies deletes for live notes, folders, and settings', async () => {
     const firestore = authorizedContext(testEnvironment).firestore();
     const note = doc(firestore, 'notes_users', OWNER_UID, 'notes', 'note-1');
     const folder = doc(firestore, 'notes_users', OWNER_UID, 'folders', 'inbox');
@@ -278,6 +278,55 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     await assertFails(deleteDoc(note));
     await assertFails(deleteDoc(folder));
     await assertFails(deleteDoc(settings));
+  });
+
+  it('allows only the owner to delete an already-trashed valid note', async () => {
+    const ownerFirestore = authorizedContext(testEnvironment).firestore();
+    const ownerNote = doc(ownerFirestore, 'notes_users', OWNER_UID, 'notes', 'note-1');
+
+    await assertSucceeds(setDoc(ownerNote, validNote()));
+    await assertSucceeds(updateDoc(ownerNote, {
+      deleted: true,
+      deletedAt: serverTimestamp(),
+      revision: 1,
+      updatedAt: serverTimestamp(),
+    }));
+
+    const nonOwnerFirestore = authorizedContext(testEnvironment, 'different-user').firestore();
+    const nonOwnerNote = doc(nonOwnerFirestore, 'notes_users', OWNER_UID, 'notes', 'note-1');
+    const anonymousFirestore = testEnvironment.unauthenticatedContext().firestore();
+    const anonymousNote = doc(anonymousFirestore, 'notes_users', OWNER_UID, 'notes', 'note-1');
+
+    await assertFails(deleteDoc(nonOwnerNote));
+    await assertFails(deleteDoc(anonymousNote));
+    await assertSucceeds(deleteDoc(ownerNote));
+    expect((await getDoc(ownerNote)).exists()).toBe(false);
+  });
+
+  it('denies deleting a malformed Trash tombstone', async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      const malformedNote = doc(
+        context.firestore(),
+        'notes_users',
+        OWNER_UID,
+        'notes',
+        'malformed-note',
+      );
+      await setDoc(malformedNote, {
+        ...validNote('malformed-note'),
+        deleted: true,
+      });
+    });
+
+    const firestore = authorizedContext(testEnvironment).firestore();
+    const malformedNote = doc(
+      firestore,
+      'notes_users',
+      OWNER_UID,
+      'notes',
+      'malformed-note',
+    );
+    await assertFails(deleteDoc(malformedNote));
   });
 
   it('denies root documents and undeclared Notes subcollections', async () => {

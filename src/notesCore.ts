@@ -47,6 +47,10 @@ const NOTE_KEYS = [
   'createdAt',
   'updatedAt',
 ] as const;
+// Trash fields are absent on every note that has never been trashed, including
+// notes written before the trash existed, so they are optional rather than
+// required. Restoring removes them again.
+const OPTIONAL_NOTE_KEYS = ['deleted', 'deletedAt'] as const;
 const FOLDER_KEYS = ['id', 'name', 'color', 'order', 'createdAt', 'updatedAt'] as const;
 const SETTINGS_KEYS = ['theme', 'smartFormatting', 'updatedAt'] as const;
 const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -57,8 +61,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  const allowed = new Set(keys);
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  optionalKeys: readonly string[] = [],
+) {
+  const allowed = new Set([...keys, ...optionalKeys]);
   return Object.keys(value).every((key) => allowed.has(key))
     && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
@@ -121,7 +129,7 @@ export function isNoteRevision(value: unknown): value is number {
 }
 
 export function parseNoteRecord(value: unknown, documentId?: string): NoteRecord | null {
-  if (!isObject(value) || !hasOnlyKeys(value, NOTE_KEYS)) return null;
+  if (!isObject(value) || !hasOnlyKeys(value, NOTE_KEYS, OPTIONAL_NOTE_KEYS)) return null;
   if (!isRecordId(value.id) || (documentId !== undefined && value.id !== documentId)) return null;
   if (typeof value.title !== 'string'
     || typeof value.content !== 'string'
@@ -149,6 +157,18 @@ export function parseNoteRecord(value: unknown, documentId?: string): NoteRecord
     ))
     || new Set(value.labels).size !== value.labels.length) return null;
 
+  // Mirror the ruleset: a note is either untrashed with neither field, or
+  // trashed with both. Any other shape is a note we refuse to display.
+  const hasDeleted = Object.prototype.hasOwnProperty.call(value, 'deleted');
+  const hasDeletedAt = Object.prototype.hasOwnProperty.call(value, 'deletedAt');
+  let deletedAt: string | undefined;
+  if (hasDeleted || hasDeletedAt) {
+    if (value.deleted !== true || !hasDeletedAt) return null;
+    const parsedDeletedAt = timestampToIso(value.deletedAt);
+    if (!parsedDeletedAt) return null;
+    deletedAt = parsedDeletedAt;
+  }
+
   return {
     id: value.id,
     title: value.title,
@@ -162,6 +182,7 @@ export function parseNoteRecord(value: unknown, documentId?: string): NoteRecord
     revision: value.revision,
     createdAt,
     updatedAt,
+    ...(deletedAt ? { deleted: true as const, deletedAt } : {}),
   };
 }
 

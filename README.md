@@ -5,13 +5,16 @@ Notes is Harsh Dave's private writing workspace at [harsh.bet/notes/](https://ha
 ## What it includes
 
 - Folders, labels, pinning, search, and a focused three-pane workspace
+- A recoverable Trash: removed notes leave every other view and can be restored, or permanently deleted after confirmation
 - Rich-text headings, lists, tasks, emphasis, links, alignment, highlights, and undo/redo
 - Optional smart formatting for common writing patterns, with a plain-text mode whenever formatting is unwanted
 - System, light, and dark themes
 - Real-time Firestore updates, so text pasted on a phone becomes available to copy on a laptop after both devices sync
 - Responsive layouts designed for desktop and mobile use
 
-Notes intentionally has no JSON import/export, file upload, archive, trash, or delete feature. It also does not keep an app-owned IndexedDB or other browser database containing note bodies. Firestore is the note source of truth; the client keeps only temporary in-memory state needed by the open page.
+Notes intentionally has no JSON import/export, file upload, or archive feature. It also does not keep an app-owned IndexedDB or other browser database containing note bodies. Firestore is the note source of truth; the client keeps only temporary in-memory state needed by the open page.
+
+Removing a note first moves it to Trash rather than deleting it. A trashed note is flagged, not destroyed: it drops out of Inbox, folders, labels, and live-note search/counts while Trash keeps its own count. It stays recoverable until it is restored or the owner chooses Delete in Trash and confirms the permanent action. Confirmed deletion removes the Firestore document, and snapshot listeners sync that removal to other signed-in devices. There is no automatic or bulk purge.
 
 ## Owner access and sync
 
@@ -19,7 +22,9 @@ Google sign-in is restricted in both the UI and Firestore rules to the verified 
 
 Firebase Auth remembers the session on that browser. Sign in once on each phone, laptop, or browser profile; later visits normally reconnect automatically until that device is explicitly signed out or its site data is cleared. There is no client-side PIN or reusable access code.
 
-Notes, folders, and preferences are separate Firestore documents beneath `notes_users/{uid}`. Snapshot listeners deliver cross-device changes in real time. The strict schema accepts creates and updates with server timestamps, denies deletes, and rejects unknown fields, malformed values, other accounts, unverified email claims, non-Google providers, mismatched UIDs, and undeclared collections.
+Notes, folders, and preferences are separate Firestore documents beneath `notes_users/{uid}`. Snapshot listeners deliver cross-device changes in real time. The strict schema accepts creates and updates with server timestamps and rejects unknown fields, malformed values, other accounts, unverified email claims, non-Google providers, mismatched UIDs, and undeclared collections. Trash is expressed inside that schema as an optional `deleted`/`deletedAt` pair, which a note either carries in full or not at all; restoring clears both fields so the document is shaped exactly like one that was never trashed. Deletes remain denied for live notes, folders, and settings; only the verified owner may delete a valid note that is already in Trash.
+
+Sync is not a backup. Firestore is durable and replicated by Google, but it is the only copy: this workspace has no export, no per-note version history, and no second store. A confirmed permanent deletion cannot be undone, and losing access to the Google account or the Firebase project would lose the notes with it.
 
 ## Firebase setup
 

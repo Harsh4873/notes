@@ -1,30 +1,28 @@
-import {
-  ArrowClockwise,
-  ArrowCounterClockwise,
-  CaretDown,
-  Check,
-  CheckSquare,
-  Code,
-  CodeBlock,
-  DotsThree,
-  Highlighter,
-  LinkSimple,
-  ListBullets,
-  ListNumbers,
-  Minus,
-  Palette,
-  Quotes,
-  TextAa,
-  TextAlignCenter,
-  TextAlignLeft,
-  TextAlignRight,
-  TextB,
-  TextItalic,
-  TextStrikethrough,
-  TextTSlash,
-  TextUnderline,
-  X,
-} from '@phosphor-icons/react';
+import { ArrowClockwise } from '@phosphor-icons/react/ArrowClockwise';
+import { ArrowCounterClockwise } from '@phosphor-icons/react/ArrowCounterClockwise';
+import { CaretDown } from '@phosphor-icons/react/CaretDown';
+import { Check } from '@phosphor-icons/react/Check';
+import { CheckSquare } from '@phosphor-icons/react/CheckSquare';
+import { Code } from '@phosphor-icons/react/Code';
+import { CodeBlock } from '@phosphor-icons/react/CodeBlock';
+import { DotsThree } from '@phosphor-icons/react/DotsThree';
+import { Highlighter } from '@phosphor-icons/react/Highlighter';
+import { LinkSimple } from '@phosphor-icons/react/LinkSimple';
+import { ListBullets } from '@phosphor-icons/react/ListBullets';
+import { ListNumbers } from '@phosphor-icons/react/ListNumbers';
+import { Minus } from '@phosphor-icons/react/Minus';
+import { Palette } from '@phosphor-icons/react/Palette';
+import { Quotes } from '@phosphor-icons/react/Quotes';
+import { TextAa } from '@phosphor-icons/react/TextAa';
+import { TextAlignCenter } from '@phosphor-icons/react/TextAlignCenter';
+import { TextAlignLeft } from '@phosphor-icons/react/TextAlignLeft';
+import { TextAlignRight } from '@phosphor-icons/react/TextAlignRight';
+import { TextB } from '@phosphor-icons/react/TextB';
+import { TextItalic } from '@phosphor-icons/react/TextItalic';
+import { TextStrikethrough } from '@phosphor-icons/react/TextStrikethrough';
+import { TextTSlash } from '@phosphor-icons/react/TextTSlash';
+import { TextUnderline } from '@phosphor-icons/react/TextUnderline';
+import { X } from '@phosphor-icons/react/X';
 import Color from '@tiptap/extension-color';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';

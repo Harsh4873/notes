@@ -81,6 +81,32 @@ describe('strict Firestore parsing', () => {
     }, note.id)).toBeNull();
   });
 
+  it('parses trashed notes and rejects half-written tombstones', () => {
+    const note = makeNote();
+    const deletedAt = newer;
+
+    expect(parseNoteRecord({ ...note, deleted: true, deletedAt }, note.id))
+      .toEqual({ ...note, deleted: true, deletedAt });
+    expect(parseNoteRecord({
+      ...note,
+      deleted: true,
+      deletedAt: { toDate: () => new Date(deletedAt) },
+    }, note.id)).toEqual({ ...note, deleted: true, deletedAt });
+
+    // A note that has never been trashed carries neither field.
+    expect(parseNoteRecord(note, note.id)).toEqual(note);
+    expect(parseNoteRecord(note, note.id)?.deleted).toBeUndefined();
+
+    // Anything between those two shapes is a note we refuse to show, because
+    // it could silently hide or resurface an entry.
+    expect(parseNoteRecord({ ...note, deleted: true }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, deletedAt }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, deleted: false }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, deleted: false, deletedAt }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, deleted: 'yes', deletedAt }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, deleted: true, deletedAt: 'not-a-date' }, note.id)).toBeNull();
+  });
+
   it('parses folders and settings only when every exact field is valid', () => {
     const folder = makeFolder();
     expect(parseFolderRecord(folder, folder.id)).toEqual(folder);

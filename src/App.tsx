@@ -1,36 +1,37 @@
-import {
-  ArrowLeft,
-  CaretDown,
-  Check,
-  CloudArrowUp,
-  CloudCheck,
-  CloudSlash,
-  Copy,
-  DotsThree,
-  Folder,
-  FunnelSimple,
-  GoogleLogo,
-  Lightning,
-  ListBullets,
-  MagnifyingGlass,
-  Monitor,
-  Moon,
-  NotePencil,
-  Notepad,
-  Plus,
-  PushPin,
-  SidebarSimple,
-  SignOut,
-  Sun,
-  Tag,
-  Tray,
-  WarningCircle,
-  X,
-} from '@phosphor-icons/react';
+import { ArrowCounterClockwise } from '@phosphor-icons/react/ArrowCounterClockwise';
+import { ArrowLeft } from '@phosphor-icons/react/ArrowLeft';
+import { CaretDown } from '@phosphor-icons/react/CaretDown';
+import { Check } from '@phosphor-icons/react/Check';
+import { CloudArrowUp } from '@phosphor-icons/react/CloudArrowUp';
+import { CloudCheck } from '@phosphor-icons/react/CloudCheck';
+import { CloudSlash } from '@phosphor-icons/react/CloudSlash';
+import { Copy } from '@phosphor-icons/react/Copy';
+import { DotsThree } from '@phosphor-icons/react/DotsThree';
+import { Folder } from '@phosphor-icons/react/Folder';
+import { FunnelSimple } from '@phosphor-icons/react/FunnelSimple';
+import { GoogleLogo } from '@phosphor-icons/react/GoogleLogo';
+import { Lightning } from '@phosphor-icons/react/Lightning';
+import { ListBullets } from '@phosphor-icons/react/ListBullets';
+import { MagnifyingGlass } from '@phosphor-icons/react/MagnifyingGlass';
+import { Monitor } from '@phosphor-icons/react/Monitor';
+import { Moon } from '@phosphor-icons/react/Moon';
+import { NotePencil } from '@phosphor-icons/react/NotePencil';
+import { Notepad } from '@phosphor-icons/react/Notepad';
+import { Plus } from '@phosphor-icons/react/Plus';
+import { PushPin } from '@phosphor-icons/react/PushPin';
+import { SidebarSimple } from '@phosphor-icons/react/SidebarSimple';
+import { SignOut } from '@phosphor-icons/react/SignOut';
+import { Sun } from '@phosphor-icons/react/Sun';
+import { Tag } from '@phosphor-icons/react/Tag';
+import { Trash } from '@phosphor-icons/react/Trash';
+import { Tray } from '@phosphor-icons/react/Tray';
+import { WarningCircle } from '@phosphor-icons/react/WarningCircle';
+import { X } from '@phosphor-icons/react/X';
 import type { User } from 'firebase/auth';
 import {
   type ChangeEvent,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   lazy,
   Suspense,
@@ -50,7 +51,7 @@ const RichTextEditor = lazy(async () => {
   return { default: module.RichTextEditor };
 });
 
-type ViewKey = 'inbox' | 'all' | 'pinned' | `folder:${string}` | `label:${string}`;
+type ViewKey = 'inbox' | 'all' | 'pinned' | 'trash' | `folder:${string}` | `label:${string}`;
 type MobilePane = 'notes' | 'editor';
 type NoteSort = 'recent' | 'oldest' | 'title';
 type FormatFilter = 'all' | 'rich' | 'plain';
@@ -64,6 +65,12 @@ interface SaveConflict {
   currentRevision?: number;
   message: string;
   noteId: string;
+}
+
+interface ToastState {
+  actionLabel?: string;
+  message: string;
+  onAction?: () => void;
 }
 
 const DEFAULT_SETTINGS: NotesSettings = {
@@ -152,6 +159,7 @@ function viewTitle(view: ViewKey, folders: FolderRecord[]) {
   if (view === 'inbox') return 'Inbox';
   if (view === 'all') return 'All notes';
   if (view === 'pinned') return 'Pinned';
+  if (view === 'trash') return 'Trash';
   if (view.startsWith('folder:')) {
     return folders.find((folder) => folder.id === view.slice(7))?.name || 'Folder';
   }
@@ -196,6 +204,32 @@ function isTransientSaveError(error: unknown) {
     'resource-exhausted',
     'unavailable',
   ].some((candidate) => code.includes(candidate));
+}
+
+// The software keyboard shrinks the visual viewport but not the layout
+// viewport, so a `position: fixed` bottom bar ends up sitting on top of the
+// line you are writing. Track how much the keyboard covers so the chrome can
+// get out of the way while typing.
+function useKeyboardCovered() {
+  const [covered, setCovered] = useState(false);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const hidden = window.innerHeight - viewport.height - viewport.offsetTop;
+      setCovered(hidden > 90);
+    };
+    update();
+    viewport.addEventListener('resize', update);
+    viewport.addEventListener('scroll', update);
+    return () => {
+      viewport.removeEventListener('resize', update);
+      viewport.removeEventListener('scroll', update);
+    };
+  }, []);
+
+  return covered;
 }
 
 function useMediaQuery(query: string) {
@@ -249,6 +283,252 @@ function NavButton({ active, count, icon, label, onClick }: NavButtonProps) {
       <span className="nav-button-label">{label}</span>
       {typeof count === 'number' && <span className="nav-button-count">{count}</span>}
     </button>
+  );
+}
+
+const SWIPE_START_DISTANCE = 8;
+const SWIPE_COMMIT_DISTANCE = 72;
+const SWIPE_MAX_DISTANCE = 104;
+
+interface SwipeGesture {
+  axis: 'pending' | 'horizontal' | 'vertical';
+  pointerId: number;
+  startX: number;
+  startY: number;
+}
+
+interface SwipeableNoteRowProps {
+  canSwipeToTrash: boolean;
+  folderName: string;
+  note: NoteRecord;
+  onCopy: () => void;
+  onDeleteRequest: () => void;
+  onRestore: () => Promise<void>;
+  onSelect: () => void;
+  onTrash: () => Promise<void>;
+  permanentlyDeleting: boolean;
+  selected: boolean;
+}
+
+function SwipeableNoteRow({
+  canSwipeToTrash,
+  folderName,
+  note,
+  onCopy,
+  onDeleteRequest,
+  onRestore,
+  onSelect,
+  onTrash,
+  permanentlyDeleting,
+  selected,
+}: SwipeableNoteRowProps) {
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [gestureActive, setGestureActive] = useState(false);
+  const [actionPending, setActionPending] = useState(false);
+  const gestureRef = useRef<SwipeGesture | undefined>(undefined);
+  const swipeOffsetRef = useRef(0);
+  const suppressNextClickRef = useRef(false);
+
+  const updateSwipeOffset = (nextOffset: number) => {
+    swipeOffsetRef.current = nextOffset;
+    setSwipeOffset(nextOffset);
+  };
+
+  const suppressSyntheticClick = () => {
+    suppressNextClickRef.current = true;
+    window.setTimeout(() => {
+      suppressNextClickRef.current = false;
+    }, 0);
+  };
+
+  const moveToTrash = async () => {
+    if (!canSwipeToTrash || actionPending) return;
+    setActionPending(true);
+    try {
+      await onTrash();
+    } finally {
+      updateSwipeOffset(0);
+      setActionPending(false);
+    }
+  };
+
+  const restore = async () => {
+    if (actionPending) return;
+    setActionPending(true);
+    try {
+      await onRestore();
+    } finally {
+      setActionPending(false);
+    }
+  };
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!canSwipeToTrash
+      || actionPending
+      || event.pointerType === 'mouse'
+      || event.button !== 0) return;
+    gestureRef.current = {
+      axis: 'pending',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    };
+    swipeOffsetRef.current = 0;
+    suppressNextClickRef.current = false;
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - gesture.startX;
+    const deltaY = event.clientY - gesture.startY;
+    const horizontalDistance = Math.abs(deltaX);
+    const verticalDistance = Math.abs(deltaY);
+
+    if (gesture.axis === 'pending') {
+      if (Math.max(horizontalDistance, verticalDistance) < SWIPE_START_DISTANCE) return;
+      if (deltaX <= 0 || verticalDistance >= horizontalDistance) {
+        gesture.axis = 'vertical';
+        return;
+      }
+      if (deltaX <= verticalDistance * 1.25) return;
+      gesture.axis = 'horizontal';
+      setGestureActive(true);
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // The pointer may already have been cancelled by the browser's scroll gesture.
+      }
+    }
+
+    if (gesture.axis !== 'horizontal') return;
+    event.preventDefault();
+    updateSwipeOffset(Math.min(SWIPE_MAX_DISTANCE, Math.max(0, deltaX)));
+  };
+
+  const finishPointerGesture = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    cancelled = false,
+  ) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    gestureRef.current = undefined;
+
+    if (typeof event.currentTarget.hasPointerCapture === 'function'
+      && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture can disappear between pointerup and lostpointercapture.
+      }
+    }
+
+    const wasHorizontal = gesture.axis === 'horizontal';
+    const shouldTrash = !cancelled
+      && wasHorizontal
+      && swipeOffsetRef.current >= SWIPE_COMMIT_DISTANCE;
+    setGestureActive(false);
+
+    if (wasHorizontal) suppressSyntheticClick();
+    if (shouldTrash) {
+      updateSwipeOffset(SWIPE_MAX_DISTANCE);
+      void moveToTrash();
+    } else {
+      updateSwipeOffset(0);
+    }
+  };
+
+  const title = note.title || 'Untitled note';
+  const busy = actionPending || permanentlyDeleting;
+
+  return (
+    <article
+      role="listitem"
+      className={`note-row ${selected ? 'is-selected' : ''} ${gestureActive ? 'is-gesture-active' : ''}`}
+      aria-busy={busy || undefined}
+    >
+      {canSwipeToTrash && (
+        <div className="note-row-swipe-action" aria-hidden="true">
+          <Trash />
+          <span>Trash</span>
+        </div>
+      )}
+      <div
+        className="note-row-foreground"
+        style={{ transform: `translate3d(${swipeOffset}px, 0, 0)` }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishPointerGesture}
+        onPointerCancel={(event) => finishPointerGesture(event, true)}
+        onLostPointerCapture={(event) => finishPointerGesture(event, true)}
+      >
+        <button
+          className="note-row-select"
+          type="button"
+          onClick={(event) => {
+            if (suppressNextClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              suppressNextClickRef.current = false;
+              return;
+            }
+            onSelect();
+          }}
+          aria-current={selected ? 'true' : undefined}
+        >
+          <span className="note-row-top">
+            <strong>{title}</strong>
+            {note.pinned && <PushPin weight="fill" aria-label="Pinned" />}
+          </span>
+          <time>{displayDate(note.updatedAt)}</time>
+          <span className="note-preview">{cleanPreview(note.contentText)}</span>
+          <span className="note-row-footer"><span>{folderName}</span></span>
+        </button>
+
+        <div className="note-row-actions">
+          {note.deleted === true ? (
+            <>
+              <button
+                className="note-row-action"
+                type="button"
+                title="Restore note"
+                aria-label={`Restore ${title}`}
+                disabled={busy}
+                onClick={() => void restore()}
+              ><ArrowCounterClockwise aria-hidden="true" /></button>
+              <button
+                className="note-row-action is-danger"
+                type="button"
+                title="Delete permanently"
+                aria-label={`Delete ${title} permanently`}
+                disabled={busy}
+                onClick={onDeleteRequest}
+              ><Trash aria-hidden="true" /></button>
+            </>
+          ) : (
+            <>
+              <button
+                className="note-row-action"
+                type="button"
+                title="Copy note"
+                aria-label={`Copy ${title}`}
+                disabled={busy}
+                onClick={onCopy}
+              ><Copy aria-hidden="true" /></button>
+              <button
+                className="note-row-action is-danger"
+                type="button"
+                title="Move to Trash"
+                aria-label={`Move ${title} to Trash`}
+                disabled={busy}
+                onClick={() => void moveToTrash()}
+              ><Trash aria-hidden="true" /></button>
+            </>
+          )}
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -373,6 +653,7 @@ export function App() {
   const sync = useNotesSync();
   const settings = sync.settings ?? DEFAULT_SETTINGS;
   const isMobileLayout = useMediaQuery('(max-width: 820px)');
+  const keyboardCovered = useKeyboardCovered();
   const [view, setView] = useState<ViewKey>('inbox');
   const [activeNoteId, setActiveNoteId] = useState<string>();
   const [search, setSearch] = useState('');
@@ -392,7 +673,10 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>('notes');
   const [localTitle, setLocalTitle] = useState('');
-  const [toast, setToast] = useState<string>();
+  const [toast, setToast] = useState<ToastState>();
+  const [deleteCandidate, setDeleteCandidate] = useState<NoteRecord>();
+  const [permanentlyDeletingNoteId, setPermanentlyDeletingNoteId] = useState<string>();
+  const [permanentDeleteError, setPermanentDeleteError] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, Partial<NoteRecord>>>({});
   const [saveRevision, setSaveRevision] = useState(0);
@@ -421,12 +705,17 @@ export function App() {
 
   const cloudNotes = sync.notes ?? [];
   cloudNotesRef.current = cloudNotes;
-  const notes = useMemo(() => cloudNotes.map((note) => ({
+  const allNotes = useMemo(() => cloudNotes.map((note) => ({
     ...note,
     ...noteDrafts[note.id],
   })), [cloudNotes, noteDrafts]);
+  // Every view except Trash works from live notes only, so a trashed note can
+  // never resurface in Inbox, a folder, a label, search, or a count.
+  const notes = useMemo(() => allNotes.filter((note) => note.deleted !== true), [allNotes]);
+  const trashedNotes = useMemo(() => allNotes.filter((note) => note.deleted === true), [allNotes]);
   const folders = sync.folders ?? [];
-  const activeNote = notes.find((note) => note.id === activeNoteId);
+  const activeNote = allNotes.find((note) => note.id === activeNoteId);
+  const activeNoteTrashed = activeNote?.deleted === true;
 
   const labels = useMemo(() => {
     const counts = new Map<string, number>();
@@ -440,7 +729,8 @@ export function App() {
 
   const visibleNotes = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    return notes
+    const inTrashView = view === 'trash';
+    return (inTrashView ? trashedNotes : notes)
       .filter((note) => {
         if (formatFilter !== 'all' && note.format !== formatFilter) return false;
         if (normalizedSearch) {
@@ -448,6 +738,7 @@ export function App() {
           return [note.title, note.contentText, folderName, ...note.labels]
             .some((value) => value.toLowerCase().includes(normalizedSearch));
         }
+        if (inTrashView) return true;
         if (view === 'inbox') return note.folderId === 'inbox';
         if (view === 'pinned') return note.pinned;
         if (view.startsWith('folder:')) return note.folderId === view.slice(7);
@@ -460,16 +751,23 @@ export function App() {
         if (noteSort === 'title') return left.title.localeCompare(right.title, undefined, { sensitivity: 'base', numeric: true });
         return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
       });
-  }, [folders, formatFilter, noteSort, notes, search, view]);
+  }, [folders, formatFilter, noteSort, notes, search, trashedNotes, view]);
 
   const counts = useMemo(() => ({
     inbox: notes.filter((note) => note.folderId === 'inbox').length,
     pinned: notes.filter((note) => note.pinned).length,
-  }), [notes]);
+    trash: trashedNotes.length,
+  }), [notes, trashedNotes]);
 
-  const showToast = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast((current) => current === message ? undefined : current), 2200);
+  const showToast = useCallback((message: string, action?: Omit<ToastState, 'message'>) => {
+    const next: ToastState = { message, ...action };
+    setToast(next);
+    // An undoable toast lingers so the action is actually reachable on a phone.
+    const lifetime = action?.onAction ? 6000 : 2200;
+    window.setTimeout(
+      () => setToast((current) => (current === next ? undefined : current)),
+      lifetime,
+    );
   }, []);
 
   const touchSaveState = useCallback(() => {
@@ -597,6 +895,25 @@ export function App() {
   }, [scheduleFlush, setNoteSaveError, sync.updateNote, touchSaveState]);
 
   flushNoteRef.current = flushNote;
+
+  const flushNoteForAction = useCallback(async (noteId: string) => {
+    // A write that was already in flight can leave a newer patch queued while
+    // flushNote waits for it. Drain that follow-up patch before changing the
+    // note's Trash state so the action can never discard a recent edit.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await flushNote(noteId);
+      if (saveErrors.current.has(noteId)) {
+        throw new Error('This note still has an unsaved edit.');
+      }
+      if (
+        !pendingPatches.current.has(noteId)
+        && !saveTimers.current.has(noteId)
+        && !inFlightNotes.current.has(noteId)
+        && !inFlightPromises.current.has(noteId)
+      ) return;
+    }
+    throw new Error('This note is still saving.');
+  }, [flushNote]);
 
   const flushAllNotes = useCallback(async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -860,6 +1177,8 @@ export function App() {
     setCreating(true);
     try {
       const folderId = view.startsWith('folder:') ? view.slice(7) : 'inbox';
+      // Trash can never list a live note, so a new note leaves that view with it.
+      if (view === 'trash') setView('inbox');
       const id = await sync.createNote({
         title: 'Untitled note',
         content: '',
@@ -933,6 +1252,114 @@ export function App() {
       showToast('Copied to clipboard');
     } catch {
       showToast('Clipboard permission is blocked');
+    }
+  };
+
+  // Trash and restore are discrete actions, so they need the freshest revision
+  // the client knows about rather than whatever the row was rendered from.
+  const freshestRevision = useCallback((noteId: string, fallback: number) => Math.max(
+    cloudNotesRef.current.find((note) => note.id === noteId)?.revision ?? fallback,
+    acknowledgedRevisions.current.get(noteId) ?? 0,
+  ), []);
+
+  const forgetDraft = useCallback((noteId: string) => {
+    const timer = saveTimers.current.get(noteId);
+    if (timer) window.clearTimeout(timer);
+    saveTimers.current.delete(noteId);
+    pendingPatches.current.delete(noteId);
+    acknowledgedRevisions.current.delete(noteId);
+    setNoteDrafts((current) => {
+      if (!current[noteId]) return current;
+      const next = { ...current };
+      delete next[noteId];
+      return next;
+    });
+  }, []);
+
+  const setTrashed = useCallback(async (note: NoteRecord, trashed: boolean) => {
+    try {
+      await flushNoteForAction(note.id);
+      const revision = await sync.setNoteTrashed(
+        note.id,
+        trashed,
+        freshestRevision(note.id, note.revision),
+      );
+      forgetDraft(note.id);
+      // The transaction can finish before its listener snapshot is rendered.
+      // Keep the committed revision so an immediate Undo never looks stale.
+      acknowledgedRevisions.current.set(note.id, revision);
+      return true;
+    } catch (trashError) {
+      showToast(saveErrors.current.has(note.id)
+        ? 'This note has an unsaved edit. Resolve it before changing its Trash state.'
+        : isConflictError(trashError)
+          ? 'This note changed on another device. Reopen it and try again.'
+          : trashed ? 'Could not move that note to Trash' : 'Could not restore that note');
+      return false;
+    }
+  }, [flushNoteForAction, forgetDraft, freshestRevision, showToast, sync.setNoteTrashed]);
+
+  const trashNote = useCallback(async (note: NoteRecord) => {
+    const title = note.title || 'Untitled note';
+    if (!await setTrashed(note, true)) return;
+    setActiveNoteId((current) => (current === note.id ? undefined : current));
+    setNoteDetailsOpen(false);
+    if (isMobileLayout) setMobilePane('notes');
+    showToast(`“${title}” moved to Trash`, {
+      actionLabel: 'Undo',
+      onAction: () => { void setTrashed(note, false); },
+    });
+  }, [isMobileLayout, setTrashed, showToast]);
+
+  const restoreNote = useCallback(async (note: NoteRecord) => {
+    if (!await setTrashed(note, false)) return;
+    if (activeNoteId === note.id) {
+      setActiveNoteId(undefined);
+      if (isMobileLayout) setMobilePane('notes');
+    }
+    setNoteDetailsOpen(false);
+    showToast(`“${note.title || 'Untitled note'}” restored`);
+  }, [activeNoteId, isMobileLayout, setTrashed, showToast]);
+
+  const requestPermanentDelete = useCallback((note: NoteRecord) => {
+    if (note.deleted !== true) return;
+    setPermanentDeleteError(undefined);
+    setDeleteCandidate(note);
+  }, []);
+
+  const closePermanentDelete = useCallback(() => {
+    if (permanentlyDeletingNoteId) return;
+    setPermanentDeleteError(undefined);
+    setDeleteCandidate(undefined);
+  }, [permanentlyDeletingNoteId]);
+
+  const confirmPermanentDelete = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const candidate = deleteCandidate;
+    if (!candidate || permanentlyDeletingNoteId) return;
+
+    setPermanentDeleteError(undefined);
+    setPermanentlyDeletingNoteId(candidate.id);
+    try {
+      await flushNoteForAction(candidate.id);
+      await sync.permanentlyDeleteNote(
+        candidate.id,
+        freshestRevision(candidate.id, candidate.revision),
+      );
+      forgetDraft(candidate.id);
+      setActiveNoteId((current) => (current === candidate.id ? undefined : current));
+      setNoteDetailsOpen(false);
+      if (isMobileLayout) setMobilePane('notes');
+      setDeleteCandidate(undefined);
+      showToast(`“${candidate.title || 'Untitled note'}” permanently deleted`);
+    } catch (deleteError) {
+      setPermanentDeleteError(saveErrors.current.has(candidate.id)
+        ? 'This note has an unsaved edit. Resolve it before permanently deleting the note.'
+        : isConflictError(deleteError)
+          ? 'This note changed on another device. Close this dialog, reopen it, and try again.'
+          : 'Could not permanently delete this note. Check your connection and try again.');
+    } finally {
+      setPermanentlyDeletingNoteId(undefined);
     }
   };
 
@@ -1078,7 +1505,7 @@ export function App() {
   }
 
   return (
-    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''}`}>
+    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
       <aside
         ref={sidebarRef}
         className="sidebar"
@@ -1101,6 +1528,7 @@ export function App() {
             <NavButton active={view === 'inbox'} count={counts.inbox} icon={<Tray aria-hidden="true" />} label="Inbox" onClick={() => chooseView('inbox')} />
             <NavButton active={view === 'all'} count={notes.length} icon={<Notepad aria-hidden="true" />} label="All notes" onClick={() => chooseView('all')} />
             <NavButton active={view === 'pinned'} count={counts.pinned} icon={<PushPin aria-hidden="true" />} label="Pinned" onClick={() => chooseView('pinned')} />
+            <NavButton active={view === 'trash'} count={counts.trash} icon={<Trash aria-hidden="true" />} label="Trash" onClick={() => chooseView('trash')} />
           </div>
 
           <div className="nav-divider" />
@@ -1317,48 +1745,43 @@ export function App() {
 
         <div className="note-list" role="list">
           {visibleNotes.map((note) => (
-            <article
-              role="listitem"
+            <SwipeableNoteRow
               key={note.id}
-              className={`note-row ${note.id === activeNoteId ? 'is-selected' : ''}`}
-            >
-              <button
-                className="note-row-select"
-                type="button"
-                onClick={() => selectNote(note.id)}
-                aria-current={note.id === activeNoteId ? 'true' : undefined}
-              >
-                <span className="note-row-top">
-                  <strong>{note.title || 'Untitled note'}</strong>
-                  {note.pinned && <PushPin weight="fill" aria-label="Pinned" />}
-                </span>
-                <time>{displayDate(note.updatedAt)}</time>
-                <span className="note-preview">{cleanPreview(note.contentText)}</span>
-                <span className="note-row-footer">
-                  <span>{folders.find((folder) => folder.id === note.folderId)?.name || (note.folderId === 'inbox' ? 'Inbox' : 'Unfiled')}</span>
-                </span>
-              </button>
-              <button
-                className="note-row-copy"
-                type="button"
-                title="Copy note"
-                aria-label={`Copy ${note.title}`}
-                onClick={() => void copyNote(note)}
-              ><Copy aria-hidden="true" /></button>
-            </article>
+              note={note}
+              folderName={folders.find((folder) => folder.id === note.folderId)?.name
+                || (note.folderId === 'inbox' ? 'Inbox' : 'Unfiled')}
+              selected={note.id === activeNoteId}
+              canSwipeToTrash={view !== 'trash' && note.deleted !== true}
+              permanentlyDeleting={permanentlyDeletingNoteId === note.id}
+              onSelect={() => selectNote(note.id)}
+              onCopy={() => void copyNote(note)}
+              onTrash={() => trashNote(note)}
+              onRestore={() => restoreNote(note)}
+              onDeleteRequest={() => requestPermanentDelete(note)}
+            />
           ))}
 
           {visibleNotes.length === 0 && (
-            <div className="empty-list">
-              <span><ListBullets aria-hidden="true" /></span>
-              <h3>{search ? 'No notes match that search' : 'A clear desk, for now'}</h3>
-              <p>{search ? 'Try a different word, folder, or label.' : 'Capture a thought and it will appear here on every signed-in device.'}</p>
-              {!search && <button type="button" onClick={() => setQuickCaptureOpen(true)}>Quick capture</button>}
-            </div>
+            view === 'trash' && !search ? (
+              <div className="empty-list">
+                <span><Trash aria-hidden="true" /></span>
+                <h3>Trash is empty</h3>
+                <p>Notes stay here until you restore them or permanently delete them.</p>
+              </div>
+            ) : (
+              <div className="empty-list">
+                <span><ListBullets aria-hidden="true" /></span>
+                <h3>{search ? 'No notes match that search' : 'A clear desk, for now'}</h3>
+                <p>{search ? 'Try a different word, folder, or label.' : 'Capture a thought and it will appear here on every signed-in device.'}</p>
+                {!search && <button type="button" onClick={() => setQuickCaptureOpen(true)}>Quick capture</button>}
+              </div>
+            )
           )}
         </div>
 
-        <button className="mobile-new-note" type="button" onClick={() => void createNewNote()}><Plus aria-hidden="true" /> New note</button>
+        {view !== 'trash' && (
+          <button className="mobile-new-note" type="button" onClick={() => void createNewNote()}><Plus aria-hidden="true" /> New note</button>
+        )}
       </section>
 
       <section
@@ -1419,11 +1842,31 @@ export function App() {
                       <p><span>Created</span><strong>{displayDate(activeNote.createdAt)}</strong></p>
                       <p><span>Updated</span><strong>{displayDate(activeNote.updatedAt)}</strong></p>
                       <p><span>Characters</span><strong>{activeNote.contentText.length.toLocaleString()}</strong></p>
+                      <div className="popover-divider" />
+                      {activeNoteTrashed ? (
+                        <button className="note-details-action" type="button" onClick={() => void restoreNote(activeNote)}>
+                          <ArrowCounterClockwise aria-hidden="true" />Restore note
+                        </button>
+                      ) : (
+                        <button className="note-details-action is-danger" type="button" onClick={() => void trashNote(activeNote)}>
+                          <Trash aria-hidden="true" />Move to Trash
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
             </header>
+
+            {activeNoteTrashed && (
+              <div className="trash-banner" role="status">
+                <Trash aria-hidden="true" />
+                <span>This note is in Trash. It stays out of your views until you restore it.</span>
+                <button type="button" onClick={() => void restoreNote(activeNote)}>
+                  <ArrowCounterClockwise aria-hidden="true" />Restore
+                </button>
+              </div>
+            )}
 
             <div className="editor-label-row">
               {activeNote.labels.map((label) => (
@@ -1558,7 +2001,57 @@ export function App() {
         </ModalShell>
       )}
 
-      {toast && <div className="toast" role="status"><Check aria-hidden="true" />{toast}</div>}
+      {deleteCandidate && (
+        <ModalShell label="Permanently delete note" onClose={closePermanentDelete}>
+          <form
+            className="permanent-delete-modal"
+            aria-describedby="permanent-delete-description"
+            onSubmit={confirmPermanentDelete}
+          >
+            <header>
+              <span className="modal-icon is-danger"><Trash aria-hidden="true" /></span>
+              <div><p className="eyebrow">Trash</p><h2>Delete forever?</h2></div>
+              <button
+                className="modal-close"
+                type="button"
+                onClick={closePermanentDelete}
+                aria-label="Close"
+                disabled={Boolean(permanentlyDeletingNoteId)}
+              ><X aria-hidden="true" /></button>
+            </header>
+            <p id="permanent-delete-description">
+              <strong>“{deleteCandidate.title || 'Untitled note'}”</strong> will be permanently
+              removed from Firebase. This cannot be undone.
+            </p>
+            {permanentDeleteError && <p className="permanent-delete-error" role="alert">{permanentDeleteError}</p>}
+            <footer>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={closePermanentDelete}
+                disabled={Boolean(permanentlyDeletingNoteId)}
+                autoFocus
+              >Cancel</button>
+              <button className="danger-button" type="submit" disabled={Boolean(permanentlyDeletingNoteId)}>
+                {permanentlyDeletingNoteId ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </footer>
+          </form>
+        </ModalShell>
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          <Check aria-hidden="true" />
+          <span>{toast.message}</span>
+          {toast.onAction && toast.actionLabel && (
+            <button className="toast-action" type="button" onClick={() => {
+              toast.onAction?.();
+              setToast(undefined);
+            }}>{toast.actionLabel}</button>
+          )}
+        </div>
+      )}
     </main>
   );
 }
