@@ -160,3 +160,20 @@ describe('Trash interactions', () => {
     expect(screen.getByText('“Trashed thought” permanently deleted')).toBeInTheDocument();
   });
 });
+
+describe('Editor', () => {
+  it('opens a note into the rich text editor without blanking the app', async () => {
+    useMockSync([makeNote()]);
+    const { container } = render(<App />);
+
+    fireEvent.click(container.querySelector('.note-row-select') as HTMLElement);
+
+    // A torn-down Tiptap editor (React StrictMode / Suspense reveal) used to
+    // throw during mount and, with no error boundary, unmount the whole app to
+    // a blank screen. The editor must mount instead.
+    await waitFor(() => {
+      expect(container.querySelector('.rich-text-editor')).not.toBeNull();
+    });
+    expect(screen.getByLabelText('Note title')).toBeInTheDocument();
+  });
+});

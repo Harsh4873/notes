@@ -1574,6 +1574,14 @@ kbd {
   gap: 9px;
 }
 
+/* Recoverable editor fault (ErrorBoundary fallback) reuses the empty-editor
+   layout but reads as a warning rather than a neutral empty state. */
+.editor-error .empty-editor-icon {
+  border-color: var(--danger-soft);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {

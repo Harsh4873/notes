@@ -283,7 +283,7 @@ export function RichTextEditor({
       if (event.key !== 'Escape') return;
       setLinkOpen(false);
       setMoreOpen(false);
-      editor?.commands.focus();
+      if (editor && !editor.isDestroyed) editor.commands.focus();
     };
     document.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onEscape);
@@ -304,7 +304,12 @@ export function RichTextEditor({
   }, [content, format, noteId]);
 
   useEffect(() => {
-    if (!editor) {
+    // Under React StrictMode and Suspense reveal, `useEditor` can hand back an
+    // instance whose ProseMirror view has already been torn down. It is still a
+    // truthy Editor, but reading `editor.commands` (or getJSON) throws because
+    // the internal command manager is null. Without an error boundary that throw
+    // unmounts the whole app, so guard on the destroyed state, not just null.
+    if (!editor || editor.isDestroyed) {
       return;
     }
 

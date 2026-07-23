@@ -42,6 +42,7 @@ import {
   useState,
 } from 'react';
 import { plainTextToRichContent, richContentToPlainText } from './editorContent';
+import { ErrorBoundary } from './ErrorBoundary';
 import type { EditorChange } from './RichTextEditor';
 import type { FolderRecord, NoteRecord, NotesSettings, ThemePreference } from './types';
 import { useNotesSync } from './useNotesSync';
@@ -1898,46 +1899,63 @@ export function App() {
             </div>
 
             <div className="editor-scroll">
-              <Suspense fallback={<div className="editor-loading" role="status">Preparing the writing tools…</div>}>
-                <RichTextEditor
-                  key={activeNote.id}
-                  noteId={activeNote.id}
-                  format={activeNote.format}
-                  content={activeNote.content}
-                  richBackup={activeNote.richBackup}
-                  titleSlot={(
-                    <textarea
-                      ref={titleRef}
-                      className="note-title-input"
-                      rows={1}
-                      value={localTitle}
-                      onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
-                        const value = event.target.value.replace(/\r?\n/g, ' ').slice(0, 240);
-                        setLocalTitle(value);
-                        queueNotePatch(activeNote.id, { title: value || 'Untitled note' });
-                      }}
-                      onBlur={() => void flushNote(activeNote.id)}
-                      aria-label="Note title"
-                      placeholder="Untitled note"
-                    />
-                  )}
-                  footerSlot={(
-                    <footer className="editor-footer">
-                      <span>{activeNote.contentText.trim() ? `${activeNote.contentText.trim().split(/\s+/).length} words` : '0 words'}</span>
-                      <span className={`inline-sync sync-${effectiveSyncStatus}`}><SyncIcon status={effectiveSyncStatus} />{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
-                    </footer>
-                  )}
-                  smartFormatting={settings.smartFormatting}
-                  onSmartFormattingChange={(enabled) => {
-                    void sync.updateSettings({ smartFormatting: enabled }).catch(() => {
-                      showToast('Could not save smart formatting yet');
-                    });
-                  }}
-                  onChange={saveEditorChange}
-                  onFormatChange={saveEditorFormat}
-                  onBlur={() => void flushNote(activeNote.id)}
-                />
-              </Suspense>
+              <ErrorBoundary
+                key={activeNote.id}
+                fallback={(reset) => (
+                  <div className="empty-editor editor-error" role="alert">
+                    <span className="empty-editor-icon"><WarningCircle aria-hidden="true" /></span>
+                    <p className="eyebrow">Editor hiccup</p>
+                    <h2>This note hit a snag.</h2>
+                    <p>Your writing is safe and still synced. Reload the editor to keep going.</p>
+                    <div>
+                      <button className="primary-button" type="button" onClick={reset}>
+                        <ArrowCounterClockwise aria-hidden="true" />Reload editor
+                      </button>
+                    </div>
+                  </div>
+                )}
+              >
+                <Suspense fallback={<div className="editor-loading" role="status">Preparing the writing tools…</div>}>
+                  <RichTextEditor
+                    key={activeNote.id}
+                    noteId={activeNote.id}
+                    format={activeNote.format}
+                    content={activeNote.content}
+                    richBackup={activeNote.richBackup}
+                    titleSlot={(
+                      <textarea
+                        ref={titleRef}
+                        className="note-title-input"
+                        rows={1}
+                        value={localTitle}
+                        onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                          const value = event.target.value.replace(/\r?\n/g, ' ').slice(0, 240);
+                          setLocalTitle(value);
+                          queueNotePatch(activeNote.id, { title: value || 'Untitled note' });
+                        }}
+                        onBlur={() => void flushNote(activeNote.id)}
+                        aria-label="Note title"
+                        placeholder="Untitled note"
+                      />
+                    )}
+                    footerSlot={(
+                      <footer className="editor-footer">
+                        <span>{activeNote.contentText.trim() ? `${activeNote.contentText.trim().split(/\s+/).length} words` : '0 words'}</span>
+                        <span className={`inline-sync sync-${effectiveSyncStatus}`}><SyncIcon status={effectiveSyncStatus} />{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
+                      </footer>
+                    )}
+                    smartFormatting={settings.smartFormatting}
+                    onSmartFormattingChange={(enabled) => {
+                      void sync.updateSettings({ smartFormatting: enabled }).catch(() => {
+                        showToast('Could not save smart formatting yet');
+                      });
+                    }}
+                    onChange={saveEditorChange}
+                    onFormatChange={saveEditorFormat}
+                    onBlur={() => void flushNote(activeNote.id)}
+                  />
+                </Suspense>
+              </ErrorBoundary>
             </div>
           </>
         ) : (
