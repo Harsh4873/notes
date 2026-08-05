@@ -2,12 +2,12 @@
 
 - Source visual truth: the selected warm editorial three-pane mock generated during the design session (the local source image is intentionally not committed)
 - Implementation screenshot: unavailable by explicit user instruction
-- Intended viewport: desktop 1440 × 1024; responsive source rules also target ≤820px and ≤520px mobile layouts
+- Intended viewport: desktop 1440 × 1024; responsive source rules also target compact laptops, ≤820px mobile layouts, and ≤560px phones
 - Intended state: signed-in owner, light theme, Inbox selected, one rich-text note open
 
 ## Full-view comparison evidence
 
-Blocked. The user and repository instructions explicitly prohibit opening a browser, preview, rendered Pages output, or live URL. Source-level review confirms that the implementation carries the selected three-pane hierarchy, warm ivory/clay/moss palette, editorial Newsreader headings, DM Sans UI text, slim separators, restrained shadows, note-list selection, formatting toolbar, mode switch, folders, labels, copy, pin, search, sync state, theme control, and responsive mobile navigation. This is not a substitute for rendered comparison evidence.
+Blocked. The user and repository instructions explicitly prohibit opening a browser, preview, rendered Pages output, or live URL. Source-level review confirms that the implementation carries the selected three-pane hierarchy, refreshed warm ivory/clay/moss palette, editorial Newsreader headings, DM Sans UI text, card-based note selection, sticky formatting toolbar, contextual table controls, prominent Quick Capture, mode switch, folders, labels, copy, pin, search, sync state, theme control, and responsive mobile navigation. This is not a substitute for rendered comparison evidence.
 
 ## Focused-region comparison evidence
 

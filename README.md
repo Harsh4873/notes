@@ -6,8 +6,8 @@ Notes is Harsh Dave's private writing workspace at [harsh.bet/notes/](https://ha
 
 - Folders, labels, pinning, search, and a focused three-pane workspace
 - A recoverable Trash: removed notes leave every other view and can be restored, or permanently deleted after confirmation
-- Rich-text headings, lists, tasks, emphasis, links, alignment, highlights, and undo/redo
-- Optional smart formatting for common writing patterns, with a plain-text mode whenever formatting is unwanted
+- Rich-text headings, lists, tasks, editable tables, emphasis, links, alignment, highlights, and undo/redo
+- Optional smart formatting for common writing patterns and pasted Markdown tables, with a plain-text mode whenever formatting is unwanted
 - System, light, and dark themes
 - Real-time Firestore updates, so text pasted on a phone becomes available to copy on a laptop after both devices sync
 - Responsive layouts designed for desktop and mobile use

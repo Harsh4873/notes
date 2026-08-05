@@ -119,6 +119,49 @@ copy on phone
     expect(result.contentText).toBe('Inbox\npaste from phone');
   });
 
+  it('turns a pasted Markdown table into an editable rich table', () => {
+    const source = `| Item | Owner | Status |
+| --- | --- | --- |
+| Outline \\| review | Me | Done |
+| Review | Team | Next |`;
+    const document = plainTextToRichDocument(source);
+
+    expect(looksLikeStructuredText(source)).toBe(true);
+    expect(document.content[0]).toMatchObject({
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableHeader' },
+            { type: 'tableHeader' },
+            { type: 'tableHeader' },
+          ],
+        },
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell' },
+            { type: 'tableCell' },
+            { type: 'tableCell' },
+          ],
+        },
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell' },
+            { type: 'tableCell' },
+            { type: 'tableCell' },
+          ],
+        },
+      ],
+    });
+    expect(richDocumentToPlainText(document)).toBe(source);
+    expect(plainTextToRichContent(source).contentText).toBe(
+      'Item\tOwner\tStatus\nOutline | review\tMe\tDone\nReview\tTeam\tNext',
+    );
+  });
+
   it('keeps formatting markers literal when smart formatting is disabled', () => {
     const result = plainTextToRichContent('## Literal\n- not a list\n**not bold**', false);
     const document = JSON.parse(result.content);

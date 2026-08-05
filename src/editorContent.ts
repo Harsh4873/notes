@@ -187,6 +187,46 @@ const orderedPattern = /^\s*(\d+)[.)]\s+(.+)$/;
 const quotePattern = /^\s*>\s?(.*)$/;
 const fencePattern = /^\s*```(?:[\w+-]+)?\s*$/;
 const dividerPattern = /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+const tableDividerCellPattern = /^:?-{3,}:?$/;
+
+const splitMarkdownTableRow = (line: string): string[] => {
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return [];
+  let withoutEdges = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+  if (withoutEdges.endsWith('|') && !withoutEdges.endsWith('\\|')) {
+    withoutEdges = withoutEdges.slice(0, -1);
+  }
+  const cells: string[] = [];
+  let current = '';
+
+  for (let index = 0; index < withoutEdges.length; index += 1) {
+    const character = withoutEdges[index];
+    if (character === '\\' && withoutEdges[index + 1] === '|') {
+      current += '|';
+      index += 1;
+    } else if (character === '|') {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+};
+
+const isMarkdownTableStart = (lines: string[], index: number): boolean => {
+  const cells = splitMarkdownTableRow(lines[index] ?? '');
+  const dividers = splitMarkdownTableRow(lines[index + 1] ?? '');
+  return cells.length >= 2
+    && dividers.length === cells.length
+    && dividers.every(cell => tableDividerCellPattern.test(cell.replace(/\s+/g, '')));
+};
+
+const tableCell = (value: string, header = false): RichTextNode => ({
+  type: header ? 'tableHeader' : 'tableCell',
+  content: [paragraph(parseInline(value))],
+});
 
 const isRecognizedBlockStart = (line: string): boolean =>
   headingPattern.test(line) ||
@@ -202,9 +242,11 @@ export const looksLikeStructuredText = (value: string): boolean => {
   const text = normalizePlainText(value);
   const lines = text.split('\n');
   const hasFencePair = lines.filter(line => fencePattern.test(line)).length >= 2;
+  const hasTable = lines.some((_, index) => isMarkdownTableStart(lines, index));
 
   return (
     hasFencePair ||
+    hasTable ||
     lines.some(
       line =>
         headingPattern.test(line) ||
@@ -236,6 +278,28 @@ export const plainTextToRichDocument = (value: string): RichTextDocument => {
 
     if (!line.trim()) {
       index += 1;
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const headings = splitMarkdownTableRow(line);
+      const rows: RichTextNode[] = [{
+        type: 'tableRow',
+        content: headings.map(value => tableCell(value, true)),
+      }];
+      index += 2;
+
+      while (index < lines.length && lines[index].trim()) {
+        const values = splitMarkdownTableRow(lines[index]);
+        if (!values.length) break;
+        rows.push({
+          type: 'tableRow',
+          content: headings.map((_, cellIndex) => tableCell(values[cellIndex] ?? '')),
+        });
+        index += 1;
+      }
+
+      content.push({ type: 'table', content: rows });
       continue;
     }
 
@@ -357,6 +421,7 @@ export const plainTextToRichDocument = (value: string): RichTextDocument => {
     while (
       index < lines.length &&
       lines[index].trim() &&
+      !isMarkdownTableStart(lines, index) &&
       !isRecognizedBlockStart(lines[index])
     ) {
       proseLines.push(lines[index]);
@@ -530,6 +595,26 @@ const serializeBlockNode = (node: RichTextNode): string => {
       return `\`\`\`\n${(node.content ?? []).map(child => child.text ?? '').join('')}\n\`\`\``;
     case 'horizontalRule':
       return '---';
+    case 'table': {
+      const rows = (node.content ?? []).map(row => (row.content ?? []).map(cell =>
+        (cell.content ?? [])
+          .map(serializeBlockNode)
+          .join('<br>')
+          .replace(/\|/g, '\\|')
+          .replace(/\n/g, '<br>'),
+      ));
+      if (!rows.length) return '';
+      const width = Math.max(2, ...rows.map(row => row.length));
+      const normalized = rows.map(row => Array.from({ length: width }, (_, index) => row[index] ?? ''));
+      const firstRowIsHeader = (node.content?.[0]?.content ?? []).every(cell => cell.type === 'tableHeader');
+      const header = firstRowIsHeader ? normalized[0] : Array.from({ length: width }, () => '');
+      const body = firstRowIsHeader ? normalized.slice(1) : normalized;
+      return [
+        `| ${header.join(' | ')} |`,
+        `| ${header.map(() => '---').join(' | ')} |`,
+        ...body.map(row => `| ${row.join(' | ')} |`),
+      ].join('\n');
+    }
     case 'listItem':
     case 'taskItem':
       return serializeListItemBody(node).join('\n');
@@ -554,6 +639,15 @@ const collectReadableText = (node: RichTextNode): string => {
   }
   if (node.type === 'horizontalRule') {
     return '';
+  }
+  if (node.type === 'table') {
+    return (node.content ?? []).map(collectReadableText).join('\n');
+  }
+  if (node.type === 'tableRow') {
+    return (node.content ?? []).map(collectReadableText).join('\t');
+  }
+  if (node.type === 'tableCell' || node.type === 'tableHeader') {
+    return (node.content ?? []).map(collectReadableText).join(' ');
   }
 
   const separator =

@@ -1600,6 +1600,11 @@ export function App() {
           ) : <kbd>⌘K</kbd>}
         </label>
 
+        <button className="topbar-capture-button" type="button" onClick={() => setQuickCaptureOpen(true)}>
+          <Lightning weight="fill" aria-hidden="true" />
+          <span>Quick capture</span>
+        </button>
+
         <button
           className={`sync-pill sync-${effectiveSyncStatus}`}
           type="button"
@@ -1822,7 +1827,7 @@ export function App() {
                 </div>
               </div>
               <div className="editor-actions">
-                <button className="copy-note-button" type="button" onClick={() => void copyNote(activeNote)}><Copy aria-hidden="true" />Copy note</button>
+                <button className="copy-note-button" type="button" onClick={() => void copyNote(activeNote)}><Copy aria-hidden="true" /><span>Copy note</span></button>
                 <button className={`icon-button ${activeNote.pinned ? 'is-active' : ''}`} type="button" onClick={() => queueNotePatch(activeNote.id, { pinned: !activeNote.pinned })} aria-label={activeNote.pinned ? 'Unpin note' : 'Pin note'} title={activeNote.pinned ? 'Unpin note' : 'Pin note'}>
                   <PushPin weight={activeNote.pinned ? 'fill' : 'regular'} aria-hidden="true" />
                 </button>
@@ -1989,12 +1994,15 @@ export function App() {
               <div><p className="eyebrow">Quick capture</p><h2>Drop it here.</h2></div>
               <button className="modal-close" type="button" onClick={() => setQuickCaptureOpen(false)} aria-label="Close"><X aria-hidden="true" /></button>
             </header>
-            <p>Paste from your phone, save once, and it will appear on your other signed-in devices.</p>
+            <p>Capture it now and shape it later. Smart formatting carries the structure to every signed-in device.</p>
+            <div className="quick-capture-hints" aria-label="Supported smart formatting">
+              <span># Heading</span><span>- [ ] Task</span><span>| Table |</span><span>``` Code</span>
+            </div>
             <textarea
               ref={quickRef}
               value={quickText}
               onChange={(event) => setQuickText(event.target.value)}
-              placeholder={'Paste or type anything…\n\nUse # headings, - lists, - [ ] checklists, > quotes, or ``` code and smart formatting will take care of the rest.'}
+              placeholder={'Paste or type anything…\n\nUse # headings, - lists, - [ ] checklists, > quotes, | tables |, or ``` code and smart formatting will take care of the rest.'}
               rows={10}
             />
             <footer>

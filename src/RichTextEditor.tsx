@@ -5,6 +5,7 @@ import { Check } from '@phosphor-icons/react/Check';
 import { CheckSquare } from '@phosphor-icons/react/CheckSquare';
 import { Code } from '@phosphor-icons/react/Code';
 import { CodeBlock } from '@phosphor-icons/react/CodeBlock';
+import { ColumnsPlusRight } from '@phosphor-icons/react/ColumnsPlusRight';
 import { DotsThree } from '@phosphor-icons/react/DotsThree';
 import { Highlighter } from '@phosphor-icons/react/Highlighter';
 import { LinkSimple } from '@phosphor-icons/react/LinkSimple';
@@ -13,6 +14,8 @@ import { ListNumbers } from '@phosphor-icons/react/ListNumbers';
 import { Minus } from '@phosphor-icons/react/Minus';
 import { Palette } from '@phosphor-icons/react/Palette';
 import { Quotes } from '@phosphor-icons/react/Quotes';
+import { RowsPlusBottom } from '@phosphor-icons/react/RowsPlusBottom';
+import { Table } from '@phosphor-icons/react/Table';
 import { TextAa } from '@phosphor-icons/react/TextAa';
 import { TextAlignCenter } from '@phosphor-icons/react/TextAlignCenter';
 import { TextAlignLeft } from '@phosphor-icons/react/TextAlignLeft';
@@ -26,6 +29,7 @@ import { X } from '@phosphor-icons/react/X';
 import Color from '@tiptap/extension-color';
 import Highlight from '@tiptap/extension-highlight';
 import Placeholder from '@tiptap/extension-placeholder';
+import { TableKit } from '@tiptap/extension-table';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import TextAlign from '@tiptap/extension-text-align';
@@ -92,6 +96,13 @@ const EDITOR_EXTENSIONS = [
     nested: true,
     a11y: {
       checkboxLabel: node => `Task: ${node.textContent || 'Untitled task'}`,
+    },
+  }),
+  TableKit.configure({
+    table: {
+      resizable: true,
+      lastColumnResizable: false,
+      HTMLAttributes: { class: 'notes-table' },
     },
   }),
   TextAlign.configure({
@@ -345,6 +356,7 @@ export function RichTextEditor({
   const hasHighlight = Boolean(editor?.isActive('highlight'));
   const canUndo = Boolean(editor?.can().chain().undo().run());
   const canRedo = Boolean(editor?.can().chain().redo().run());
+  const isInTable = Boolean(editor?.isActive('table'));
 
   const changeTextStyle = (nextStyle: string) => {
     if (!editor) {
@@ -593,6 +605,14 @@ export function RichTextEditor({
             <ListNumbers size={17} aria-hidden="true" />
           </ToolbarButton>
           <ToolbarButton
+            label="Insert 3 by 3 table"
+            active={isInTable}
+            disabled={!richEnabled || isInTable}
+            onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+          >
+            <Table size={17} aria-hidden="true" />
+          </ToolbarButton>
+          <ToolbarButton
             label="Quote"
             active={Boolean(editor?.isActive('blockquote'))}
             disabled={!richEnabled}
@@ -729,6 +749,16 @@ export function RichTextEditor({
                   <Minus size={16} aria-hidden="true" />
                   Divider
                 </button>
+                {!isInTable ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => runMoreCommand(() => void editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run())}
+                  >
+                    <Table size={16} aria-hidden="true" />
+                    Insert table
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   role="menuitemradio"
@@ -827,6 +857,30 @@ export function RichTextEditor({
             </button>
           </div>
         </div>
+
+        {format === 'rich' && isInTable ? (
+          <div className="rich-text-editor__table-tools" role="toolbar" aria-label="Table editing">
+            <span><Table size={15} aria-hidden="true" />Table</span>
+            <button type="button" onClick={() => editor?.chain().focus().addRowAfter().run()}>
+              <RowsPlusBottom size={15} aria-hidden="true" />Add row
+            </button>
+            <button type="button" onClick={() => editor?.chain().focus().addColumnAfter().run()}>
+              <ColumnsPlusRight size={15} aria-hidden="true" />Add column
+            </button>
+            <button type="button" onClick={() => editor?.chain().focus().toggleHeaderRow().run()}>
+              Header
+            </button>
+            <button type="button" onClick={() => editor?.chain().focus().deleteRow().run()}>
+              Remove row
+            </button>
+            <button type="button" onClick={() => editor?.chain().focus().deleteColumn().run()}>
+              Remove column
+            </button>
+            <button className="is-danger" type="button" onClick={() => editor?.chain().focus().deleteTable().run()}>
+              Remove table
+            </button>
+          </div>
+        ) : null}
 
         {linkOpen ? (
           <form className="rich-text-editor__link-popover" id="rich-link-editor" role="dialog" aria-label="Edit link" onSubmit={applyLink}>
