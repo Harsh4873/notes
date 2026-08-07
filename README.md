@@ -18,7 +18,7 @@ Removing a note first moves it to Trash rather than deleting it. A trashed note 
 
 ## Owner access and sync
 
-Google sign-in is restricted in both the UI and Firestore rules to the verified `hdav4873@gmail.com` account. A valid request must also come from the same authenticated UID used in its `notes_users/{uid}` path and must report Google's sign-in provider.
+Any verified Google account can sign in. A valid request must come from the same authenticated UID used in its `notes_users/{uid}` path and must report Google's sign-in provider, so every account has a private workspace.
 
 Firebase Auth remembers the session on that browser. Sign in once on each phone, laptop, or browser profile; later visits normally reconnect automatically until that device is explicitly signed out or its site data is cleared. There is no client-side PIN or reusable access code.
 
@@ -32,9 +32,9 @@ This repository points the Firebase CLI at the existing `pickledgerpro` project.
 
 1. Enable Google as a sign-in provider.
 2. Add `harsh.bet` to **Authentication → Settings → Authorized domains**. Add any separate preview hostname only when it is intentionally used for sign-in.
-3. Confirm `hdav4873@gmail.com` is the sole account intended to use Notes.
+3. Confirm Google sign-in is enabled and the Pages domains are authorized.
 
-The Firebase web configuration is public client configuration, not an authorization boundary. Owner enforcement lives in `firestore.rules`. Because deploying Firestore rules replaces the project's entire ruleset, this file begins with the complete shared Daymark, Slate, Fare, and Research (Sift) rules and adds Notes before the final deny-all.
+The Firebase web configuration is public client configuration, not an authorization boundary. UID isolation lives in `firestore.rules`. Because deploying Firestore rules replaces the project's entire ruleset, this file contains the complete Gym, Daymark, Slate, Fare, Sift, Notes, and Recall policy before the final deny-all.
 
 Deploy the combined rules intentionally:
 

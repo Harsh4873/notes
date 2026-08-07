@@ -36,7 +36,6 @@ import {
   MAX_NOTE_RICH_BACKUP_LENGTH,
   MAX_NOTE_TITLE_LENGTH,
   MAX_NOTE_TEXT_BYTES,
-  OWNER_EMAIL,
   STARTER_FOLDERS,
   isFolderColor,
   isFolderId,
@@ -108,8 +107,9 @@ export function friendlyNotesError(error: unknown): string {
   return 'Notes could not finish syncing. Try again in a moment.';
 }
 
-function isOwner(user: User) {
-  return user.email?.toLocaleLowerCase() === OWNER_EMAIL && user.emailVerified;
+function isVerifiedGoogleUser(user: User) {
+  return user.emailVerified
+    && user.providerData.some(({ providerId }) => providerId === 'google.com');
 }
 
 function notesCollection(uid: string) {
@@ -153,8 +153,8 @@ function assertRecordId(value: unknown, label: string): asserts value is string 
   if (!isRecordId(value)) throw new Error(`${label} has an invalid id.`);
 }
 
-function ownerOnlyMessage() {
-  return `Notes only allows ${OWNER_EMAIL}.`;
+function verifiedGoogleMessage() {
+  return 'Use a verified Google account to sync Notes.';
 }
 
 export function useNotesSync(): NotesSyncApi {
@@ -393,8 +393,8 @@ export function useNotesSync(): NotesSyncApi {
           return;
         }
 
-        if (!isOwner(authUser)) {
-          rejectedAccountMessage = ownerOnlyMessage();
+        if (!isVerifiedGoogleUser(authUser)) {
+          rejectedAccountMessage = verifiedGoogleMessage();
           resetPrivateState();
           setAuthStatus('signed-out');
           setError(rejectedAccountMessage);
@@ -462,12 +462,12 @@ export function useNotesSync(): NotesSyncApi {
     try {
       await authPersistenceReady;
       const result = await signInWithPopup(firebaseAuth, googleProvider);
-      if (!isOwner(result.user)) {
+      if (!isVerifiedGoogleUser(result.user)) {
         await firebaseSignOut(firebaseAuth);
         setAuthStatus('signed-out');
         setUser(null);
         setSyncStatus('error');
-        setError(ownerOnlyMessage());
+        setError(verifiedGoogleMessage());
       }
     } catch (signInError) {
       setAuthStatus(firebaseAuth.currentUser ? 'signed-in' : 'signed-out');

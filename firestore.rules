@@ -2,21 +2,68 @@ rules_version = '2';
 
 // Complete Firestore ruleset for every private harsh.bet app in the shared
 // `pickledgerpro` Firebase project. Deploying one rules file replaces the
-// project rules, so this file must be kept identical on Daymark, Slate, Fare,
-// and Sift branches whenever any block changes.
+// project rules, so this file must stay identical in Gym, Daymark, Slate,
+// Fare, Notes, and Research. Each verified Google account receives an isolated
+// UID-scoped workspace in every app.
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthorizedGoogleAccount() {
+    function isVerifiedGoogleAccount() {
       return request.auth != null
-        && request.auth.token.email == 'hdav4873@gmail.com'
+        && request.auth.token.email is string
         && request.auth.token.email_verified == true
         && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
+    // Gym (strength training log) ---------------------------------
+    function ownsGymData(userId) {
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+    }
+
+    function isValidGymLog(date) {
+      return request.resource.data.schemaVersion == 1
+        && request.resource.data.date == date
+        && request.resource.data.deleted is bool
+        && request.resource.data.updatedAt is string
+        && request.resource.data.updatedAtMs is int
+        && request.resource.data.clientId is string;
+    }
+
+    function isValidGymCoreUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let programIsCurrent = !changed.hasAny(['program'])
+        || !resource.data.keys().hasAll(['programUpdatedAtMs'])
+        || request.resource.data.programUpdatedAtMs >= resource.data.programUpdatedAtMs;
+      let preferencesAreCurrent = !changed.hasAny(['preferences'])
+        || !resource.data.keys().hasAll(['preferencesUpdatedAtMs'])
+        || request.resource.data.preferencesUpdatedAtMs >= resource.data.preferencesUpdatedAtMs;
+      return programIsCurrent && preferencesAreCurrent;
+    }
+
+    match /users/{userId}/gym/core {
+      allow read: if ownsGymData(userId);
+      allow create: if ownsGymData(userId)
+        && request.resource.data.schemaVersion == 1;
+      allow update: if ownsGymData(userId)
+        && request.resource.data.schemaVersion == 1
+        && isValidGymCoreUpdate();
+      allow delete: if false;
+    }
+
+    match /users/{userId}/logs/{date} {
+      allow read: if ownsGymData(userId);
+      allow create: if ownsGymData(userId) && isValidGymLog(date);
+      allow update: if ownsGymData(userId)
+        && isValidGymLog(date)
+        && request.resource.data.updatedAtMs >= resource.data.updatedAtMs;
+      // Workout clears are tombstones. Physical deletes could let an old
+      // offline client upload a stale workout again.
+      allow delete: if false;
+    }
+
     // Daymark (habit tracker) ---------------------------------------
     function ownsDaymarkData(userId) {
-      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
     }
 
     function hasConsistentGeneration() {
@@ -39,7 +86,7 @@ service cloud.firestore {
 
     // Slate (schedule + to-do) -------------------------------------
     function ownsSlateData(userId) {
-      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
     }
 
     match /slate_users/{userId} {
@@ -62,7 +109,7 @@ service cloud.firestore {
 
     // Fare (calorie + nutrition tracker) ---------------------------
     function ownsFareData(userId) {
-      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
     }
 
     function isValidFareSingleton(documentId) {
@@ -124,7 +171,7 @@ service cloud.firestore {
 
     // Sift (research paper workspace) -------------------------------
     function ownsResearchData(userId) {
-      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
     }
 
     function isValidResearchTombstone() {
@@ -167,7 +214,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'email', 'displayName', 'photoURL', 'onboardingComplete', 'updatedAt'
         ])
-        && request.resource.data.email == 'hdav4873@gmail.com'
+        && request.resource.data.email == request.auth.token.email
         && request.resource.data.displayName is string
         && request.resource.data.onboardingComplete is bool
         && request.resource.data.updatedAt is string
@@ -415,7 +462,7 @@ service cloud.firestore {
 
     // Notes (private synced notes) ---------------------------------
     function ownsNotesData(userId) {
-      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
     }
 
     function isValidNotesId(value) {
@@ -603,6 +650,92 @@ service cloud.firestore {
         allow read: if ownsNotesData(userId) && documentId == 'current';
         allow create, update: if ownsNotesData(userId)
           && isValidNotesSettings(documentId);
+      }
+    }
+
+    // Recall (markdown study guide, lives at /research/) -----------
+    function ownsRecallData(userId) {
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+    }
+
+    function isValidRecallId(value) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= 128
+        && value.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    // A study set is either live (no tombstone fields) or deleted
+    // (deleted == true with an int millisecond timestamp).
+    function isValidRecallTombstone() {
+      return (
+        !('deleted' in request.resource.data)
+        && !('deletedAt' in request.resource.data)
+      ) || (
+        request.resource.data.deleted == true
+        && ('deletedAt' in request.resource.data)
+        && request.resource.data.deletedAt is int
+      );
+    }
+
+    function isValidRecallSet(setId) {
+      return request.resource.data.keys().hasAll([
+          'id', 'title', 'markdown', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'title', 'markdown', 'createdAt', 'updatedAt', 'deleted', 'deletedAt'
+        ])
+        && request.resource.data.id == setId
+        && isValidRecallId(request.resource.data.id)
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 240
+        && request.resource.data.markdown is string
+        && request.resource.data.markdown.size() <= 600000
+        && request.resource.data.createdAt is int
+        && request.resource.data.updatedAt is int
+        && isValidRecallTombstone();
+    }
+
+    function keepsRecallSetHistory() {
+      return request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt >= resource.data.updatedAt;
+    }
+
+    function isValidRecallProgress(setId) {
+      return request.resource.data.keys().hasAll(['setId', 'cards', 'updatedAt'])
+        && request.resource.data.keys().hasOnly([
+          'setId', 'cards', 'updatedAt', 'bestMatchMs'
+        ])
+        && request.resource.data.setId == setId
+        && isValidRecallId(request.resource.data.setId)
+        && request.resource.data.cards is map
+        && request.resource.data.updatedAt is int
+        && (
+          !('bestMatchMs' in request.resource.data)
+          || (request.resource.data.bestMatchMs is int && request.resource.data.bestMatchMs > 0)
+        );
+    }
+
+    match /recall_users/{userId} {
+      // Recall has no root document. Sets are removed via tombstones so
+      // deletions propagate between devices; progress docs may be deleted
+      // outright once their set is tombstoned.
+      match /sets/{setId} {
+        allow read: if ownsRecallData(userId);
+        allow create: if ownsRecallData(userId) && isValidRecallSet(setId);
+        allow update: if ownsRecallData(userId)
+          && isValidRecallSet(setId)
+          && keepsRecallSetHistory();
+      }
+
+      match /progress/{setId} {
+        allow read: if ownsRecallData(userId);
+        allow create: if ownsRecallData(userId) && isValidRecallProgress(setId);
+        allow update: if ownsRecallData(userId)
+          && isValidRecallProgress(setId)
+          && request.resource.data.updatedAt >= resource.data.updatedAt;
+        allow delete: if ownsRecallData(userId);
       }
     }
 

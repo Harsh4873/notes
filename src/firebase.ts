@@ -6,7 +6,6 @@ import {
   setPersistence,
 } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import { OWNER_EMAIL } from './notesCore';
 
 export const APP_NAME = 'notes';
 
@@ -29,7 +28,7 @@ export const firebaseAuth = getAuth(firebaseApp);
 export const authPersistenceReady = setPersistence(firebaseAuth, browserLocalPersistence);
 
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ login_hint: OWNER_EMAIL });
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // getFirestore intentionally uses the SDK's default in-memory cache. Notes
 // never enables persistentLocalCache, IndexedDB persistence, or app-owned

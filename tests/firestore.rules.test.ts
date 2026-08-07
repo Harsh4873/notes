@@ -18,7 +18,7 @@ import {
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const PROJECT_ID = 'demo-notes';
-const ALLOWED_EMAIL = 'hdav4873@gmail.com';
+const TEST_EMAIL = 'user.one@example.com';
 const OWNER_UID = 'notes-owner';
 const EMULATOR_ADDRESS = process.env.FIRESTORE_EMULATOR_HOST;
 
@@ -28,7 +28,7 @@ function authorizedContext(
   overrides: Record<string, unknown> = {},
 ): RulesTestContext {
   return testEnvironment.authenticatedContext(uid, {
-    email: ALLOWED_EMAIL,
+    email: TEST_EMAIL,
     email_verified: true,
     firebase: { sign_in_provider: 'google.com' },
     ...overrides,
@@ -139,20 +139,21 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     await assertFails(setDoc(note, validNote()));
   });
 
-  it('denies the owner UID with the wrong email', async () => {
-    const firestore = authorizedContext(testEnvironment, OWNER_UID, {
+  it('allows another verified Google account to use its own UID-scoped workspace', async () => {
+    const secondUid = 'second-notes-user';
+    const firestore = authorizedContext(testEnvironment, secondUid, {
       email: 'someone-else@example.com',
     }).firestore();
 
-    await assertFails(
+    await assertSucceeds(
       setDoc(
-        doc(firestore, 'notes_users', OWNER_UID, 'notes', 'note-1'),
+        doc(firestore, 'notes_users', secondUid, 'notes', 'note-1'),
         validNote(),
       ),
     );
   });
 
-  it('denies the approved but unverified email', async () => {
+  it('denies an unverified email', async () => {
     const firestore = authorizedContext(testEnvironment, OWNER_UID, {
       email_verified: false,
     }).firestore();
@@ -165,7 +166,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     );
   });
 
-  it('denies the approved email when the provider is not Google', async () => {
+  it('denies an email when the provider is not Google', async () => {
     const firestore = authorizedContext(testEnvironment, OWNER_UID, {
       firebase: { sign_in_provider: 'password' },
     }).firestore();
@@ -341,18 +342,30 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     );
 
     await assertFails(getDoc(root));
-    await assertFails(setDoc(root, { email: ALLOWED_EMAIL }));
+    await assertFails(setDoc(root, { email: TEST_EMAIL }));
     await assertFails(getDoc(privateDocument));
     await assertFails(setDoc(privateDocument, { value: 'not allowed' }));
   });
 
   it('keeps every existing shared-app namespace working for the owner', async () => {
     const firestore = authorizedContext(testEnvironment).firestore();
+    const gymCore = doc(firestore, 'users', OWNER_UID, 'gym', 'core');
+    const gymLog = doc(firestore, 'users', OWNER_UID, 'logs', '2026-08-07');
     const daymark = doc(firestore, 'daymark_users', OWNER_UID);
     const slateTask = doc(firestore, 'slate_users', OWNER_UID, 'tasks', 'task-1');
     const fareFood = doc(firestore, 'fare_users', OWNER_UID, 'foods', 'food-1');
     const researchNote = doc(firestore, 'research_users', OWNER_UID, 'notes', 'note-1');
+    const recallSet = doc(firestore, 'recall_users', OWNER_UID, 'sets', 'set-1');
 
+    await assertSucceeds(setDoc(gymCore, { schemaVersion: 1 }));
+    await assertSucceeds(setDoc(gymLog, {
+      schemaVersion: 1,
+      date: '2026-08-07',
+      deleted: false,
+      updatedAt: '2026-08-07T12:00:00.000Z',
+      updatedAtMs: 1,
+      clientId: 'rules-test',
+    }));
     await assertSucceeds(setDoc(daymark, {
       generationId: 'generation-1',
       profileGenerationId: 'generation-1',
@@ -371,11 +384,21 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
       body: 'Regression check',
       color: 'amber',
     }));
+    await assertSucceeds(setDoc(recallSet, {
+      id: 'set-1',
+      title: 'Regression check',
+      markdown: '# Recall',
+      createdAt: 1,
+      updatedAt: 1,
+    }));
 
+    await assertSucceeds(getDoc(gymCore));
+    await assertSucceeds(getDoc(gymLog));
     await assertSucceeds(getDoc(daymark));
     await assertSucceeds(getDoc(slateTask));
     await assertSucceeds(getDoc(fareFood));
     await assertSucceeds(getDoc(researchNote));
+    await assertSucceeds(getDoc(recallSet));
   });
 
   it('denies a non-owner across every existing shared-app namespace', async () => {
@@ -386,6 +409,17 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     }).firestore();
 
     const attempts = [
+      () => setDoc(doc(firestore, 'users', OWNER_UID, 'gym', 'core'), {
+        schemaVersion: 1,
+      }),
+      () => setDoc(doc(firestore, 'users', OWNER_UID, 'logs', '2026-08-07'), {
+        schemaVersion: 1,
+        date: '2026-08-07',
+        deleted: false,
+        updatedAt: '2026-08-07T12:00:00.000Z',
+        updatedAtMs: 1,
+        clientId: 'rules-test',
+      }),
       () => setDoc(doc(firestore, 'daymark_users', OWNER_UID), {
         generationId: 'generation-1',
         profileGenerationId: 'generation-1',
@@ -405,6 +439,13 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
         paperId: 'paper-1',
         body: 'Denied',
         color: 'amber',
+      }),
+      () => setDoc(doc(firestore, 'recall_users', OWNER_UID, 'sets', 'set-1'), {
+        id: 'set-1',
+        title: 'Denied',
+        markdown: '# Denied',
+        createdAt: 1,
+        updatedAt: 1,
       }),
     ];
 

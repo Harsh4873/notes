@@ -32,7 +32,7 @@ function useMockSync(notes: NoteRecord[]) {
     authStatus: 'signed-in',
     user: {
       displayName: 'Harsh Dave',
-      email: 'hdav4873@gmail.com',
+      email: 'user.one@example.com',
       emailVerified: true,
     } as User,
     notes,

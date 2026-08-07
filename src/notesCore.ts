@@ -5,7 +5,6 @@ import type {
   NotesSettings,
 } from './types';
 
-export const OWNER_EMAIL = 'hdav4873@gmail.com';
 export const INBOX_FOLDER_ID = 'inbox';
 export const MAX_LABELS_PER_NOTE = 12;
 export const MAX_LABEL_LENGTH = 48;

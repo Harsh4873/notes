@@ -643,7 +643,7 @@ function AuthScreen({
           <span>{loading ? 'Checking your session…' : working ? 'Opening Google…' : 'Continue with Google'}</span>
         </button>
         {error && <p className="auth-error" role="alert">{error}</p>}
-        <p className="auth-note">Only hdav4873@gmail.com can open this workspace.</p>
+        <p className="auth-note">Each Google account gets a private synced workspace.</p>
       </section>
       <p className="auth-footnote">Capture on your phone. Copy on your laptop. No PIN to remember.</p>
     </main>
