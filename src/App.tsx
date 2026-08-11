@@ -1463,6 +1463,9 @@ export function App() {
       delete next[noteId];
       return next;
     });
+    // Dropping the local edit is the owner resolving the rejected save, so the
+    // sync hook stops reporting it and re-reads the cloud copy it just kept.
+    sync.retrySync();
     touchSaveState();
     showToast('Loaded the version from your other device');
   };

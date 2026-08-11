@@ -174,6 +174,8 @@ export function useNotesSync(): NotesSyncApi {
   const streamStatesRef = useRef(initialStreamStates());
   const streamErrorsRef = useRef(initialStreamErrors());
   const pendingWritesRef = useRef(0);
+  const writeErrorRef = useRef<string | undefined>(undefined);
+  const writeFailureCountRef = useRef(0);
   const restartListenersRef = useRef<() => void>(() => undefined);
 
   const updateSyncStatus = useCallback(() => {
@@ -186,6 +188,17 @@ export function useNotesSync(): NotesSyncApi {
       return;
     }
     if (Object.values(streamErrorsRef.current).some(Boolean)) {
+      setSyncStatus('error');
+      return;
+    }
+
+    // A rejected write is not repaired by the next snapshot. Notes keeps no
+    // local copy of an edit the server refused, so the change is already gone:
+    // keep reporting the failure until a later write actually lands, or until
+    // the owner asks to retry. Reporting "Synced" here would claim a save that
+    // never happened.
+    if (writeErrorRef.current) {
+      setError(writeErrorRef.current);
       setSyncStatus('error');
       return;
     }
@@ -203,17 +216,23 @@ export function useNotesSync(): NotesSyncApi {
   }, []);
 
   const trackWrite = useCallback(async <T,>(write: Promise<T>): Promise<T> => {
+    const failuresAtStart = writeFailureCountRef.current;
     pendingWritesRef.current += 1;
-    setError(undefined);
     setSyncStatus(browserIsOnline() ? 'syncing' : 'offline');
     try {
       const result = await write;
       pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+      // Only a write that ran start to finish without any other write being
+      // rejected may clear the error. A concurrent save that happens to
+      // succeed must never paper over a sibling save the server refused.
+      if (writeFailureCountRef.current === failuresAtStart) writeErrorRef.current = undefined;
       updateSyncStatus();
       return result;
     } catch (writeError) {
       pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
-      setError(friendlyNotesError(writeError));
+      writeFailureCountRef.current += 1;
+      writeErrorRef.current = friendlyNotesError(writeError);
+      setError(writeErrorRef.current);
       setSyncStatus(browserIsOnline() ? 'error' : 'offline');
       throw writeError;
     }
@@ -232,6 +251,7 @@ export function useNotesSync(): NotesSyncApi {
       streamUnsubscribes = [];
       streamStatesRef.current = initialStreamStates();
       streamErrorsRef.current = initialStreamErrors();
+      writeErrorRef.current = undefined;
     }
 
     function handleStreamError(stream: StreamName, streamError: unknown) {
@@ -781,6 +801,10 @@ export function useNotesSync(): NotesSyncApi {
 
   const retrySync = useCallback(() => {
     streamErrorsRef.current = initialStreamErrors();
+    // Retrying is the owner explicitly asking to start over, so a past write
+    // failure stops being reported. Nothing else clears it: only a write that
+    // succeeds does.
+    writeErrorRef.current = undefined;
     setError(undefined);
     if (activeUidRef.current) {
       setSyncStatus(browserIsOnline() ? 'syncing' : 'offline');
