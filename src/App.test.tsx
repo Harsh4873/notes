@@ -31,7 +31,7 @@ function useMockSync(notes: NoteRecord[]) {
   const api = {
     authStatus: 'signed-in',
     user: {
-      displayName: 'Harsh Dave',
+      displayName: 'Test User',
       email: 'user.one@example.com',
       emailVerified: true,
     } as User,

@@ -1,6 +1,6 @@
 # Notes
 
-Notes is Harsh Dave's private writing workspace at [harsh.bet/notes/](https://harsh.bet/notes/). It combines a warm editorial interface with fast organization, rich or plain-text writing, and live phone-to-laptop sync.
+Notes is a private writing workspace at [harsh.bet/notes/](https://harsh.bet/notes/). Every verified Google account gets its own. It combines a warm editorial interface with fast organization, rich or plain-text writing, and live phone-to-laptop sync.
 
 ## What it includes
 

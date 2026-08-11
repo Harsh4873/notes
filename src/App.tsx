@@ -1652,7 +1652,7 @@ export function App() {
             <div className="profile-menu popover" id="profile-menu" role="dialog" aria-label="Account">
               <div className="profile-summary">
                 <span className="profile-avatar-large">{initials(sync.user)}</span>
-                <span><strong>{sync.user.displayName || 'Harsh'}</strong><small>{sync.user.email}</small></span>
+                <span><strong>{sync.user.displayName || sync.user.email?.split('@')[0] || 'Your account'}</strong><small>{sync.user.email}</small></span>
               </div>
               <div className="popover-divider" />
               <button type="button" onClick={() => void signOut()}><SignOut aria-hidden="true" />Sign out</button>

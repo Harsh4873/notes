@@ -9,7 +9,7 @@ import { getFirestore } from 'firebase/firestore';
 
 export const APP_NAME = 'notes';
 
-// Notes shares Harsh's existing pickledgerpro Firebase project, but uses its
+// Notes shares the existing pickledgerpro Firebase project, but uses its
 // own named app and notes_users collection so its auth and data stay isolated
 // from the other harsh.bet tools on the same origin.
 const firebaseConfig = {
