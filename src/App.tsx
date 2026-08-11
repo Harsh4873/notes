@@ -149,7 +149,7 @@ function labelColor(label: string) {
 }
 
 function initials(user: User | null) {
-  const source = user?.displayName?.trim() || user?.email?.split('@')[0] || 'HD';
+  const source = user?.displayName?.trim() || user?.email?.split('@')[0] || '?';
   const parts = source.split(/\s+/).filter(Boolean);
   return parts.length > 1
     ? `${parts[0][0]}${parts.at(-1)?.[0]}`.toUpperCase()

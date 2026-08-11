@@ -1,7 +1,7 @@
 {
-  "name": "Notes — Harsh",
+  "name": "Notes",
   "short_name": "Notes",
-  "description": "Harsh's private, beautifully organized notes workspace.",
+  "description": "A private, beautifully organized notes workspace.",
   "id": "/notes/",
   "start_url": "/notes/",
   "scope": "/notes/",
