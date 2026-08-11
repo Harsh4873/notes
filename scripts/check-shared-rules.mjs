@@ -19,7 +19,7 @@ if (actualHash !== expectedHash) {
   );
 }
 
-const siblingNames = ['gym', 'daymark', 'fare', 'slate', 'research'];
+const siblingNames = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree'];
 let compared = 0;
 
 for (const siblingName of siblingNames) {

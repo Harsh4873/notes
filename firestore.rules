@@ -3,8 +3,8 @@ rules_version = '2';
 // Complete Firestore ruleset for every private harsh.bet app in the shared
 // `pickledgerpro` Firebase project. Deploying one rules file replaces the
 // project rules, so this file must stay identical in Gym, Daymark, Slate,
-// Fare, Notes, and Research. Each verified Google account receives an isolated
-// UID-scoped workspace in every app.
+// Fare, Notes, Research, and Degree. Each verified Google account receives an
+// isolated UID-scoped workspace in every app.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -737,6 +737,42 @@ service cloud.firestore {
           && request.resource.data.updatedAt >= resource.data.updatedAt;
         allow delete: if ownsRecallData(userId);
       }
+    }
+
+    // Degree Canvas (MSCS degree planner) --------------------------
+    function ownsDegreeData(userId) {
+      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+    }
+
+    // Degree Canvas keeps one document per account: the whole planner board
+    // resolved last-write-wins on `updatedAtMs`, which never moves backwards.
+    function isValidDegreePlan() {
+      return request.resource.data.keys().hasAll([
+          'schemaVersion', 'planner', 'updatedAt', 'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'schemaVersion', 'planner', 'updatedAt', 'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.planner is map
+        && request.resource.data.planner.keys().hasAll(['terms', 'completedBreadth'])
+        && request.resource.data.planner.keys().hasOnly(['terms', 'completedBreadth'])
+        && request.resource.data.planner.terms is list
+        && request.resource.data.planner.terms.size() <= 40
+        && request.resource.data.planner.completedBreadth is map
+        && request.resource.data.updatedAt is string
+        && request.resource.data.updatedAtMs is int
+        && request.resource.data.clientId is string
+        && request.resource.data.clientId.size() > 0
+        && request.resource.data.clientId.size() <= 128;
+    }
+
+    match /degree_users/{userId} {
+      allow read: if ownsDegreeData(userId);
+      allow create: if ownsDegreeData(userId) && isValidDegreePlan();
+      allow update: if ownsDegreeData(userId)
+        && isValidDegreePlan()
+        && request.resource.data.updatedAtMs >= resource.data.updatedAtMs;
     }
 
     match /{document=**} {
