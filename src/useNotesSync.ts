@@ -26,6 +26,7 @@ import {
   googleProvider,
   notesFirestore,
 } from './firebase';
+import { resolveOwnerVault } from './owner-vault';
 import {
   DEFAULT_NOTES_SETTINGS,
   INBOX_FOLDER_ID,
@@ -433,8 +434,7 @@ export function useNotesSync(): NotesSyncApi {
       unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
         if (disposed) return;
         const revision = ++authRevision;
-        const nextUid = authUser?.uid ?? null;
-        stopListeners(activeUidRef.current !== nextUid);
+        stopListeners(true);
         activeUidRef.current = null;
         setUser(null);
 
@@ -461,22 +461,35 @@ export function useNotesSync(): NotesSyncApi {
         setError(undefined);
         setSyncStatus(browserIsOnline() ? 'syncing' : 'offline');
         void (async () => {
-          const token = await authUser.getIdTokenResult();
+          let token: IdTokenResult;
+          try {
+            token = await authUser.getIdTokenResult();
+          } catch {
+            rejectCurrentAccount(
+              revision,
+              'Notes could not verify this Google session. Sign in again to continue.',
+            );
+            return;
+          }
           if (disposed || revision !== authRevision) return;
           if (!hasCanonicalNotesClaims(token)) {
             rejectCurrentAccount(revision, verifiedGoogleMessage());
             return;
           }
 
-          activeUidRef.current = authUser.uid;
+          const membership = await resolveOwnerVault(notesFirestore, authUser);
+          if (disposed || revision !== authRevision) return;
+          activeUidRef.current = membership.vaultId;
           setUser(authUser);
           setAuthStatus('signed-in');
           setError(undefined);
-          startListeners(authUser.uid);
-        })().catch(() => {
+          startListeners(membership.vaultId);
+        })().catch((error) => {
           rejectCurrentAccount(
             revision,
-            'Notes could not verify this Google session. Sign in again to continue.',
+            error instanceof Error
+              ? error.message
+              : 'Notes could not verify this Google session. Sign in again to continue.',
           );
         });
       }, (authError) => {

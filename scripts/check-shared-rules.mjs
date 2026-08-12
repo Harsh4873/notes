@@ -18,7 +18,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SIBLING_NAMES = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree'];
+const SIBLING_NAMES = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'studies', 'radar'];
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');

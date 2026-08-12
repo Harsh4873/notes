@@ -3,8 +3,10 @@ rules_version = '2';
 // Complete Firestore ruleset for every private harsh.bet app in the shared
 // `pickledgerpro` Firebase project. Deploying one rules file replaces the
 // project rules, so this file must stay identical in Gym, Daymark, Slate,
-// Fare, Notes, Research, and Degree. Each verified Google account receives an
-// isolated UID-scoped workspace in every app.
+// Fare, Notes, Research, Degree, Studies, and Radar. Approved verified Google
+// identities resolve through a private membership document to one shared
+// owner vault. Legacy UID roots remain readable recovery archives; migration
+// can keep their writes open briefly through `legacyWritesEnabled`.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -15,9 +17,55 @@ service cloud.firestore {
         && request.auth.token.firebase.sign_in_provider == 'google.com';
     }
 
+    function membershipPath() {
+      return /databases/$(database)/documents/owner_vault_members/$(request.auth.uid);
+    }
+
+    function hasOwnerMembership() {
+      return isVerifiedGoogleAccount()
+        && exists(membershipPath())
+        && get(membershipPath()).data.schemaVersion == 1
+        && get(membershipPath()).data.vaultId is string
+        && get(membershipPath()).data.status in ['migrating', 'active'];
+    }
+
+    function hasVaultAccess(vaultId) {
+      return hasOwnerMembership()
+        && get(membershipPath()).data.vaultId == vaultId;
+    }
+
+    function canReadPrivateData(dataOwnerId) {
+      return hasVaultAccess(dataOwnerId)
+        || (hasOwnerMembership() && request.auth.uid == dataOwnerId);
+    }
+
+    function canWritePrivateData(dataOwnerId) {
+      return hasVaultAccess(dataOwnerId)
+        || (
+          hasOwnerMembership()
+          && request.auth.uid == dataOwnerId
+          && get(membershipPath()).data.legacyWritesEnabled == true
+        );
+    }
+
+    match /owner_vault_members/{memberId} {
+      allow read: if isVerifiedGoogleAccount() && request.auth.uid == memberId;
+      allow write: if false;
+    }
+
+    match /owner_vaults/{vaultId} {
+      allow read: if hasVaultAccess(vaultId);
+      allow write: if false;
+
+      match /recovery/{snapshotId} {
+        allow read: if hasVaultAccess(vaultId);
+        allow write: if false;
+      }
+    }
+
     // Gym (strength training log) ---------------------------------
     function ownsGymData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function isValidGymLog(date) {
@@ -41,7 +89,7 @@ service cloud.firestore {
     }
 
     match /users/{userId}/gym/core {
-      allow read: if ownsGymData(userId);
+      allow read: if canReadPrivateData(userId);
       allow create: if ownsGymData(userId)
         && request.resource.data.schemaVersion == 1;
       allow update: if ownsGymData(userId)
@@ -51,7 +99,7 @@ service cloud.firestore {
     }
 
     match /users/{userId}/logs/{date} {
-      allow read: if ownsGymData(userId);
+      allow read: if canReadPrivateData(userId);
       allow create: if ownsGymData(userId) && isValidGymLog(date);
       allow update: if ownsGymData(userId)
         && isValidGymLog(date)
@@ -63,7 +111,7 @@ service cloud.firestore {
 
     // Daymark (habit tracker) ---------------------------------------
     function ownsDaymarkData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function hasConsistentGeneration() {
@@ -72,44 +120,49 @@ service cloud.firestore {
     }
 
     match /daymark_users/{userId} {
-      allow read: if ownsDaymarkData(userId);
+      allow read: if canReadPrivateData(userId);
       allow create, update: if ownsDaymarkData(userId) && hasConsistentGeneration();
 
       match /habits/{habitId} {
-        allow read, write: if ownsDaymarkData(userId);
+        allow read: if canReadPrivateData(userId);
+        allow write: if ownsDaymarkData(userId);
       }
 
       match /entries/{entryId} {
-        allow read, write: if ownsDaymarkData(userId);
+        allow read: if canReadPrivateData(userId);
+        allow write: if ownsDaymarkData(userId);
       }
     }
 
     // Slate (schedule + to-do) -------------------------------------
     function ownsSlateData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     match /slate_users/{userId} {
-      allow read: if ownsSlateData(userId);
+      allow read: if canReadPrivateData(userId);
       allow create, update: if ownsSlateData(userId)
         && request.resource.data.schemaVersion == 1;
 
       match /sections/{sectionId} {
-        allow read, write: if ownsSlateData(userId);
+        allow read: if canReadPrivateData(userId);
+        allow write: if ownsSlateData(userId);
       }
 
       match /tasks/{taskId} {
-        allow read, write: if ownsSlateData(userId);
+        allow read: if canReadPrivateData(userId);
+        allow write: if ownsSlateData(userId);
       }
 
       match /blocks/{blockId} {
-        allow read, write: if ownsSlateData(userId);
+        allow read: if canReadPrivateData(userId);
+        allow write: if ownsSlateData(userId);
       }
     }
 
     // Fare (calorie + nutrition tracker) ---------------------------
     function ownsFareData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function isValidFareSingleton(documentId) {
@@ -136,34 +189,34 @@ service cloud.firestore {
       // Fare has no root document. Explicit subcollection rules below are
       // intentionally the only access path.
       match /profile/{documentId} {
-        allow read: if ownsFareData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create, update: if ownsFareData(userId) && isValidFareSingleton(documentId);
       }
 
       match /targets/{documentId} {
-        allow read: if ownsFareData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create, update: if ownsFareData(userId) && isValidFareSingleton(documentId);
       }
 
       match /settings/{documentId} {
-        allow read: if ownsFareData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create, update: if ownsFareData(userId) && isValidFareSingleton(documentId);
       }
 
       match /foods/{foodId} {
-        allow read: if ownsFareData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsFareData(userId) && isValidFareEntity(foodId);
         allow update: if ownsFareData(userId) && isValidFareEntity(foodId) && keepsFareTombstone();
       }
 
       match /meals/{mealId} {
-        allow read: if ownsFareData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsFareData(userId) && isValidFareEntity(mealId);
         allow update: if ownsFareData(userId) && isValidFareEntity(mealId) && keepsFareTombstone();
       }
 
       match /entries/{entryId} {
-        allow read: if ownsFareData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsFareData(userId) && isValidFareEntity(entryId);
         allow update: if ownsFareData(userId) && isValidFareEntity(entryId) && keepsFareTombstone();
       }
@@ -171,7 +224,7 @@ service cloud.firestore {
 
     // Sift (research paper workspace) -------------------------------
     function ownsResearchData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function isValidResearchTombstone() {
@@ -419,7 +472,7 @@ service cloud.firestore {
     match /research_users/{userId} {
       // Sift has no readable root document and never stores original PDF bytes.
       match /profile/{documentId} {
-        allow read: if ownsResearchData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create: if ownsResearchData(userId) && isValidResearchProfile(documentId);
         allow update: if ownsResearchData(userId)
           && isValidResearchProfile(documentId)
@@ -427,7 +480,7 @@ service cloud.firestore {
       }
 
       match /settings/{documentId} {
-        allow read: if ownsResearchData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create: if ownsResearchData(userId) && isValidResearchSettings(documentId);
         allow update: if ownsResearchData(userId)
           && isValidResearchSettings(documentId)
@@ -435,7 +488,7 @@ service cloud.firestore {
       }
 
       match /papers/{paperId} {
-        allow read: if ownsResearchData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsResearchData(userId) && isValidResearchPaper(paperId);
         allow update: if ownsResearchData(userId)
           && isValidResearchPaper(paperId)
@@ -444,7 +497,7 @@ service cloud.firestore {
       }
 
       match /notes/{noteId} {
-        allow read: if ownsResearchData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsResearchData(userId) && isValidResearchNote(noteId);
         allow update: if ownsResearchData(userId)
           && isValidResearchNote(noteId)
@@ -452,7 +505,7 @@ service cloud.firestore {
       }
 
       match /messages/{messageId} {
-        allow read: if ownsResearchData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsResearchData(userId) && isValidResearchMessage(messageId);
         allow update: if ownsResearchData(userId)
           && isValidResearchMessage(messageId)
@@ -462,7 +515,7 @@ service cloud.firestore {
 
     // Notes (private synced notes) ---------------------------------
     function ownsNotesData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function isValidNotesId(value) {
@@ -620,7 +673,7 @@ service cloud.firestore {
       // Notes has no root document. Only these explicit, owner-scoped
       // subcollections are readable or writable.
       match /notes/{noteId} {
-        allow read: if ownsNotesData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsNotesData(userId)
           && isValidNotesNote(request.resource.data, noteId)
           && hasNotesCreateRevision()
@@ -637,7 +690,7 @@ service cloud.firestore {
       }
 
       match /folders/{folderId} {
-        allow read: if ownsNotesData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsNotesData(userId)
           && isValidNotesFolder(folderId)
           && hasNotesCreateTimestamps();
@@ -647,7 +700,7 @@ service cloud.firestore {
       }
 
       match /settings/{documentId} {
-        allow read: if ownsNotesData(userId) && documentId == 'current';
+        allow read: if canReadPrivateData(userId) && documentId == 'current';
         allow create, update: if ownsNotesData(userId)
           && isValidNotesSettings(documentId);
       }
@@ -655,7 +708,7 @@ service cloud.firestore {
 
     // Recall (markdown study guide, lives at /research/) -----------
     function ownsRecallData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     function isValidRecallId(value) {
@@ -722,7 +775,7 @@ service cloud.firestore {
       // deletions propagate between devices; progress docs may be deleted
       // outright once their set is tombstoned.
       match /sets/{setId} {
-        allow read: if ownsRecallData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsRecallData(userId) && isValidRecallSet(setId);
         allow update: if ownsRecallData(userId)
           && isValidRecallSet(setId)
@@ -730,7 +783,7 @@ service cloud.firestore {
       }
 
       match /progress/{setId} {
-        allow read: if ownsRecallData(userId);
+        allow read: if canReadPrivateData(userId);
         allow create: if ownsRecallData(userId) && isValidRecallProgress(setId);
         allow update: if ownsRecallData(userId)
           && isValidRecallProgress(setId)
@@ -741,7 +794,7 @@ service cloud.firestore {
 
     // Degree Canvas (MSCS degree planner) --------------------------
     function ownsDegreeData(userId) {
-      return isVerifiedGoogleAccount() && request.auth.uid == userId;
+      return canWritePrivateData(userId);
     }
 
     // Degree Canvas keeps one document per account: the whole planner board
@@ -768,11 +821,134 @@ service cloud.firestore {
     }
 
     match /degree_users/{userId} {
-      allow read: if ownsDegreeData(userId);
+      allow read: if canReadPrivateData(userId);
       allow create: if ownsDegreeData(userId) && isValidDegreePlan();
       allow update: if ownsDegreeData(userId)
         && isValidDegreePlan()
         && request.resource.data.updatedAtMs >= resource.data.updatedAtMs;
+    }
+
+    // Studies (paid participant-study preferences) ----------------
+    function isValidStudiesVault() {
+      return request.resource.data.keys().hasAll([
+          'schemaVersion', 'profile', 'saved', 'dismissed', 'filters',
+          'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'schemaVersion', 'profile', 'saved', 'dismissed', 'filters',
+          'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.profile is map
+        && request.resource.data.profile.keys().hasAll([
+          'age', 'rightHanded', 'mriSafe', 'hasCardiovascularCondition',
+          'isPregnant', 'hasSeizureHistory', 'sex', 'willingToFast',
+          'isTamuStudent'
+        ])
+        && request.resource.data.profile.keys().hasOnly([
+          'age', 'rightHanded', 'mriSafe', 'hasCardiovascularCondition',
+          'isPregnant', 'hasSeizureHistory', 'sex', 'willingToFast',
+          'isTamuStudent'
+        ])
+        && (request.resource.data.profile.age == null
+          || (request.resource.data.profile.age is int
+            && request.resource.data.profile.age >= 0
+            && request.resource.data.profile.age <= 120))
+        && (request.resource.data.profile.rightHanded == null || request.resource.data.profile.rightHanded is bool)
+        && (request.resource.data.profile.mriSafe == null || request.resource.data.profile.mriSafe is bool)
+        && (request.resource.data.profile.hasCardiovascularCondition == null || request.resource.data.profile.hasCardiovascularCondition is bool)
+        && (request.resource.data.profile.isPregnant == null || request.resource.data.profile.isPregnant is bool)
+        && (request.resource.data.profile.hasSeizureHistory == null || request.resource.data.profile.hasSeizureHistory is bool)
+        && (request.resource.data.profile.sex == null || request.resource.data.profile.sex in ['male', 'female', 'other'])
+        && (request.resource.data.profile.willingToFast == null || request.resource.data.profile.willingToFast is bool)
+        && (request.resource.data.profile.isTamuStudent == null || request.resource.data.profile.isTamuStudent is bool)
+        && request.resource.data.saved is list
+        && request.resource.data.saved.size() <= 2000
+        && request.resource.data.dismissed is list
+        && request.resource.data.dismissed.size() <= 2000
+        && request.resource.data.filters is map
+        && request.resource.data.filters.keys().hasAll([
+          'query', 'minRate', 'minTotal', 'maxHours', 'mode', 'sort',
+          'tags', 'eligibleOnly', 'showDismissed'
+        ])
+        && request.resource.data.filters.keys().hasOnly([
+          'query', 'minRate', 'minTotal', 'maxHours', 'mode', 'sort',
+          'tags', 'eligibleOnly', 'showDismissed'
+        ])
+        && request.resource.data.filters.query is string
+        && request.resource.data.filters.query.size() <= 300
+        && request.resource.data.filters.minRate is string
+        && request.resource.data.filters.minTotal is string
+        && request.resource.data.filters.maxHours is string
+        && request.resource.data.filters.mode in ['any', 'online', 'inperson']
+        && request.resource.data.filters.sort in ['rate', 'total', 'time', 'new']
+        && request.resource.data.filters.tags is list
+        && request.resource.data.filters.tags.size() <= 100
+        && request.resource.data.filters.eligibleOnly is bool
+        && request.resource.data.filters.showDismissed is bool
+        && request.resource.data.updatedAtMs is int
+        && request.resource.data.clientId is string
+        && request.resource.data.clientId.size() > 0
+        && request.resource.data.clientId.size() <= 128;
+    }
+
+    match /studies_vaults/{vaultId} {
+      allow read: if hasVaultAccess(vaultId);
+      allow create: if hasVaultAccess(vaultId) && isValidStudiesVault();
+      allow update: if hasVaultAccess(vaultId)
+        && isValidStudiesVault()
+        && request.resource.data.updatedAtMs >= resource.data.updatedAtMs;
+      allow delete: if false;
+    }
+
+    // Radar (private discovery state; public feed stays static) ----
+    function isValidRadarVault() {
+      return request.resource.data.keys().hasAll([
+          'schemaVersion', 'state', 'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'schemaVersion', 'state', 'updatedAtMs', 'clientId'
+        ])
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.state is map
+        && request.resource.data.state.keys().hasAll([
+          'lastVisit', 'saved', 'dismissed', 'tracked', 'feedback',
+          'authors', 'companies', 'signalBias'
+        ])
+        && request.resource.data.state.keys().hasOnly([
+          'lastVisit', 'saved', 'dismissed', 'tracked', 'feedback',
+          'authors', 'companies', 'signalBias'
+        ])
+        && request.resource.data.state.saved is list
+        && request.resource.data.state.saved.size() <= 5000
+        && request.resource.data.state.dismissed is list
+        && request.resource.data.state.dismissed.size() <= 5000
+        && request.resource.data.state.tracked is list
+        && request.resource.data.state.tracked.size() <= 5000
+        && request.resource.data.state.feedback is map
+        && request.resource.data.state.feedback.size() <= 5000
+        && request.resource.data.state.authors is list
+        && request.resource.data.state.authors.size() <= 1000
+        && request.resource.data.state.companies is list
+        && request.resource.data.state.companies.size() <= 1000
+        && request.resource.data.state.signalBias is map
+        && request.resource.data.state.signalBias.size() <= 1000
+        && (request.resource.data.state.lastVisit == null
+          || (request.resource.data.state.lastVisit is string
+            && request.resource.data.state.lastVisit.size() <= 64))
+        && request.resource.data.updatedAtMs is int
+        && request.resource.data.clientId is string
+        && request.resource.data.clientId.size() > 0
+        && request.resource.data.clientId.size() <= 128;
+    }
+
+    match /radar_vaults/{vaultId} {
+      allow read: if hasVaultAccess(vaultId);
+      allow create: if hasVaultAccess(vaultId) && isValidRadarVault();
+      allow update: if hasVaultAccess(vaultId)
+        && isValidRadarVault()
+        && request.resource.data.updatedAtMs >= resource.data.updatedAtMs;
+      allow delete: if false;
     }
 
     match /{document=**} {

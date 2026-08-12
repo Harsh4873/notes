@@ -18,6 +18,11 @@ const harness = vi.hoisted(() => ({
   updateDoc: vi.fn(async () => undefined),
   setDoc: vi.fn(async () => undefined),
   runTransaction: vi.fn(async () => undefined),
+  resolveOwnerVault: vi.fn(async (_firestore: unknown, user: { uid: string }) => ({
+    vaultId: user.uid,
+    schemaVersion: 1 as const,
+    status: 'active' as const,
+  })),
 }));
 
 vi.mock('./firebase', () => ({
@@ -26,6 +31,10 @@ vi.mock('./firebase', () => ({
   firebaseAuth: { currentUser: null },
   googleProvider: {},
   notesFirestore: { __firestore: true },
+}));
+
+vi.mock('./owner-vault', () => ({
+  resolveOwnerVault: harness.resolveOwnerVault,
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -154,6 +163,7 @@ beforeEach(() => {
   harness.updateDoc.mockClear();
   harness.setDoc.mockClear();
   harness.runTransaction.mockClear();
+  harness.resolveOwnerVault.mockClear();
 });
 
 afterEach(() => {

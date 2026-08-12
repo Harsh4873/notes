@@ -15,7 +15,7 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const PROJECT_ID = 'demo-notes';
 const TEST_EMAIL = 'user.one@example.com';
@@ -88,6 +88,14 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     });
   });
 
+  beforeEach(async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'owner_vault_members', OWNER_UID), {
+        vaultId: OWNER_UID, schemaVersion: 1, status: 'active', legacyWritesEnabled: false,
+      });
+    });
+  });
+
   afterEach(async () => {
     if (testEnvironment) await testEnvironment.clearFirestore();
   });
@@ -139,13 +147,13 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     await assertFails(setDoc(note, validNote()));
   });
 
-  it('allows another verified Google account to use its own UID-scoped workspace', async () => {
+  it('denies an unapproved verified Google account a Firebase workspace', async () => {
     const secondUid = 'second-notes-user';
     const firestore = authorizedContext(testEnvironment, secondUid, {
       email: 'someone-else@example.com',
     }).firestore();
 
-    await assertSucceeds(
+    await assertFails(
       setDoc(
         doc(firestore, 'notes_users', secondUid, 'notes', 'note-1'),
         validNote(),

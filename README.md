@@ -22,7 +22,7 @@ Any verified Google account can sign in. A valid request must come from the same
 
 Firebase Auth remembers the session on that browser. Sign in once on each phone, laptop, or browser profile; later visits normally reconnect automatically until that device is explicitly signed out or its site data is cleared. There is no client-side PIN or reusable access code.
 
-Notes, folders, and preferences are separate Firestore documents beneath `notes_users/{uid}`. Snapshot listeners deliver cross-device changes in real time. The strict schema accepts creates and updates with server timestamps and rejects unknown fields, malformed values, other accounts, unverified email claims, non-Google providers, mismatched UIDs, and undeclared collections. Trash is expressed inside that schema as an optional `deleted`/`deletedAt` pair, which a note either carries in full or not at all; restoring clears both fields so the document is shaped exactly like one that was never trashed. The Notes client exposes no permanent-delete or purge path. For compatibility with the shared canonical policy, the backend rules retain a legacy owner-only delete allowance for a valid note that is already in Trash; live or malformed notes still cannot be deleted.
+Notes, folders, and preferences are separate Firestore documents beneath `notes_users/{vaultId}`. A verified Google session must have an active `owner_vault_members/{uid}` record; both approved identities resolve to the same private vault, while unprovisioned accounts fail closed. Snapshot listeners deliver cross-device changes in real time. The strict schema accepts creates and updates with server timestamps and rejects unknown fields, malformed values, unverified email claims, non-Google providers, mismatched vaults, and undeclared collections. Trash is expressed inside that schema as an optional `deleted`/`deletedAt` pair, which a note either carries in full or not at all; restoring clears both fields so the document is shaped exactly like one that was never trashed. The Notes client exposes no permanent-delete or purge path. For compatibility with the shared canonical policy, the backend rules retain a legacy owner-only delete allowance for a valid note that is already in Trash; live or malformed notes still cannot be deleted.
 
 Sync is not a backup. Firestore is durable and replicated by Google, but it is the only copy: this workspace has no export, no per-note version history, and no second store. Losing access to the Google account or the Firebase project would lose the notes with it.
 
@@ -50,7 +50,7 @@ npm run test:rules
 
 Rule tests require Java 21+ and Firebase CLI `15.14.0`. The Pages workflow installs that pinned CLI version before running the emulator suite.
 
-Before a shared Firebase rules release, run `npm run check:rules-parity` from this workspace. It verifies the reviewed rules hash even in a one-repository CI checkout and, when the sibling repositories are present, requires the Gym, Daymark, Fare, Slate, Research, and Degree copies to be byte-identical.
+Before a shared Firebase rules release, run `npm run check:rules-parity` from this workspace. It verifies the reviewed rules hash even in a one-repository CI checkout and, when the sibling repositories are present, requires the Gym, Daymark, Fare, Slate, Research, Degree, Studies, and Radar copies to be byte-identical.
 
 ## Development and Pages
 
