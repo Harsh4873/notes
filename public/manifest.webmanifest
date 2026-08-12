@@ -7,8 +7,8 @@
   "scope": "/notes/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#f7f3ec",
-  "theme_color": "#f7f3ec",
+  "background_color": "#f5f0e8",
+  "theme_color": "#f5f0e8",
   "icons": [
     {
       "src": "/notes/favicon.png",

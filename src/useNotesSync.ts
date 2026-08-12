@@ -3,6 +3,7 @@ import {
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
+  type IdTokenResult,
   type User,
 } from 'firebase/auth';
 import {
@@ -107,9 +108,10 @@ export function friendlyNotesError(error: unknown): string {
   return 'Notes could not finish syncing. Try again in a moment.';
 }
 
-function isVerifiedGoogleUser(user: User) {
-  return user.emailVerified
-    && user.providerData.some(({ providerId }) => providerId === 'google.com');
+function hasCanonicalNotesClaims(token: IdTokenResult) {
+  return token.signInProvider === 'google.com'
+    && typeof token.claims.email === 'string'
+    && token.claims.email_verified === true;
 }
 
 function notesCollection(uid: string) {
@@ -135,14 +137,15 @@ function metadataState(metadata: SnapshotMetadata): StreamState {
 function parseCollection<T>(
   snapshot: QuerySnapshot<DocumentData>,
   parser: (value: unknown, documentId?: string) => T | null,
-): T[] | null {
+): { parsed: T[]; rejectedCount: number } {
   const parsed: T[] = [];
+  let rejectedCount = 0;
   for (const item of snapshot.docs) {
     const value = parser(item.data({ serverTimestamps: 'estimate' }), item.id);
-    if (!value) return null;
-    parsed.push(value);
+    if (value) parsed.push(value);
+    else rejectedCount += 1;
   }
-  return parsed;
+  return { parsed, rejectedCount };
 }
 
 function assertText(value: unknown, field: string): asserts value is string {
@@ -161,6 +164,7 @@ export function useNotesSync(): NotesSyncApi {
   const [authStatus, setAuthStatus] = useState<NotesSyncApi['authStatus']>('loading');
   const [user, setUser] = useState<User | null>(null);
   const [notes, setNotes] = useState<NoteRecord[]>([]);
+  const [notesReady, setNotesReady] = useState(false);
   const [folders, setFolders] = useState<FolderRecord[]>([]);
   const [settings, setSettings] = useState<NotesSettings>(DEFAULT_NOTES_SETTINGS);
   const [syncStatus, setSyncStatus] = useState<NotesSyncStatus>(() => (
@@ -245,13 +249,18 @@ export function useNotesSync(): NotesSyncApi {
     let seedingFolders = false;
     let seedingSettings = false;
     let rejectedAccountMessage: string | undefined;
+    let authRevision = 0;
 
-    function stopListeners() {
+    function stopListeners(clearWriteError = false) {
       streamUnsubscribes.forEach((unsubscribe) => unsubscribe());
       streamUnsubscribes = [];
       streamStatesRef.current = initialStreamStates();
       streamErrorsRef.current = initialStreamErrors();
-      writeErrorRef.current = undefined;
+      // A listener restart only repairs reads. It does not make a rejected
+      // write land, so preserve that failure until the account changes, the
+      // owner retries, or a later qualifying write succeeds.
+      if (clearWriteError) writeErrorRef.current = undefined;
+      setNotesReady(false);
     }
 
     function handleStreamError(stream: StreamName, streamError: unknown) {
@@ -323,42 +332,52 @@ export function useNotesSync(): NotesSyncApi {
         notesCollection(uid),
         { includeMetadataChanges: true },
         (snapshot) => {
-          const parsed = parseCollection(snapshot, parseNoteRecord);
-          if (!parsed) {
-            streamStatesRef.current.notes = metadataState(snapshot.metadata);
-            handleStreamError('notes', new Error('A cloud note has an unsupported format.'));
-            return;
-          }
+          if (activeUidRef.current !== uid) return;
+          const { parsed, rejectedCount } = parseCollection(snapshot, parseNoteRecord);
           const nextNotes = sortNotes(parsed);
           setNotes(nextNotes);
+          setNotesReady(true);
           acceptStreamMetadata('notes', snapshot.metadata);
+          if (rejectedCount > 0) {
+            handleStreamError(
+              'notes',
+              new Error(`${rejectedCount === 1 ? 'A cloud note has' : 'Some cloud notes have'} an unsupported format and ${rejectedCount === 1 ? 'was' : 'were'} hidden.`),
+            );
+          }
         },
-        (streamError) => handleStreamError('notes', streamError),
+        (streamError) => {
+          if (activeUidRef.current === uid) handleStreamError('notes', streamError);
+        },
       ));
 
       streamUnsubscribes.push(onSnapshot(
         foldersCollection(uid),
         { includeMetadataChanges: true },
         (snapshot) => {
-          const parsed = parseCollection(snapshot, parseFolderRecord);
-          if (!parsed) {
-            streamStatesRef.current.folders = metadataState(snapshot.metadata);
-            handleStreamError('folders', new Error('A cloud folder has an unsupported format.'));
-            return;
-          }
+          if (activeUidRef.current !== uid) return;
+          const { parsed, rejectedCount } = parseCollection(snapshot, parseFolderRecord);
           const nextFolders = sortFolders(parsed);
           foldersRef.current = nextFolders;
           setFolders(nextFolders);
           acceptStreamMetadata('folders', snapshot.metadata);
+          if (rejectedCount > 0) {
+            handleStreamError(
+              'folders',
+              new Error(`${rejectedCount === 1 ? 'A cloud folder has' : 'Some cloud folders have'} an unsupported format and ${rejectedCount === 1 ? 'was' : 'were'} hidden.`),
+            );
+          }
           if (snapshot.empty && !snapshot.metadata.fromCache) seedFolders(uid);
         },
-        (streamError) => handleStreamError('folders', streamError),
+        (streamError) => {
+          if (activeUidRef.current === uid) handleStreamError('folders', streamError);
+        },
       ));
 
       streamUnsubscribes.push(onSnapshot(
         settingsDocument(uid),
         { includeMetadataChanges: true },
         (snapshot) => {
+          if (activeUidRef.current !== uid) return;
           if (!snapshot.exists()) {
             setSettings(DEFAULT_NOTES_SETTINGS);
             acceptStreamMetadata('settings', snapshot.metadata);
@@ -375,7 +394,9 @@ export function useNotesSync(): NotesSyncApi {
           setSettings(parsed);
           acceptStreamMetadata('settings', snapshot.metadata);
         },
-        (streamError) => handleStreamError('settings', streamError),
+        (streamError) => {
+          if (activeUidRef.current === uid) handleStreamError('settings', streamError);
+        },
       ));
     }
     restartListenersRef.current = () => {
@@ -386,16 +407,34 @@ export function useNotesSync(): NotesSyncApi {
     function resetPrivateState() {
       foldersRef.current = [];
       setNotes([]);
+      setNotesReady(false);
       setFolders([]);
       setSettings(DEFAULT_NOTES_SETTINGS);
       setLastSyncedAt(undefined);
+    }
+
+    function rejectCurrentAccount(revision: number, message: string) {
+      if (disposed || revision !== authRevision) return;
+      rejectedAccountMessage = message;
+      stopListeners(true);
+      activeUidRef.current = null;
+      setUser(null);
+      resetPrivateState();
+      setAuthStatus('signed-out');
+      setError(message);
+      setSyncStatus(browserIsOnline() ? 'error' : 'offline');
+      void firebaseSignOut(firebaseAuth).catch((signOutError) => {
+        if (!disposed && revision === authRevision) setError(friendlyNotesError(signOutError));
+      });
     }
 
     function registerAuthListener() {
       if (disposed) return;
       unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
         if (disposed) return;
-        stopListeners();
+        const revision = ++authRevision;
+        const nextUid = authUser?.uid ?? null;
+        stopListeners(activeUidRef.current !== nextUid);
         activeUidRef.current = null;
         setUser(null);
 
@@ -413,27 +452,40 @@ export function useNotesSync(): NotesSyncApi {
           return;
         }
 
-        if (!isVerifiedGoogleUser(authUser)) {
-          rejectedAccountMessage = verifiedGoogleMessage();
-          resetPrivateState();
-          setAuthStatus('signed-out');
-          setError(rejectedAccountMessage);
-          setSyncStatus('error');
-          void firebaseSignOut(firebaseAuth).catch((signOutError) => {
-            if (!disposed) setError(friendlyNotesError(signOutError));
-          });
-          return;
-        }
-
-        activeUidRef.current = authUser.uid;
-        setUser(authUser);
-        setAuthStatus('signed-in');
+        // The Firebase User's linked providers do not identify how the current
+        // session authenticated. Keep the workspace private until the current
+        // ID token itself satisfies the same claims as the canonical rules.
+        rejectedAccountMessage = undefined;
+        resetPrivateState();
+        setAuthStatus('loading');
         setError(undefined);
-        startListeners(authUser.uid);
+        setSyncStatus(browserIsOnline() ? 'syncing' : 'offline');
+        void (async () => {
+          const token = await authUser.getIdTokenResult();
+          if (disposed || revision !== authRevision) return;
+          if (!hasCanonicalNotesClaims(token)) {
+            rejectCurrentAccount(revision, verifiedGoogleMessage());
+            return;
+          }
+
+          activeUidRef.current = authUser.uid;
+          setUser(authUser);
+          setAuthStatus('signed-in');
+          setError(undefined);
+          startListeners(authUser.uid);
+        })().catch(() => {
+          rejectCurrentAccount(
+            revision,
+            'Notes could not verify this Google session. Sign in again to continue.',
+          );
+        });
       }, (authError) => {
         if (disposed) return;
+        authRevision += 1;
+        stopListeners(true);
         activeUidRef.current = null;
         setUser(null);
+        resetPrivateState();
         setAuthStatus('signed-out');
         setError(friendlyNotesError(authError));
         setSyncStatus(browserIsOnline() ? 'error' : 'offline');
@@ -463,6 +515,7 @@ export function useNotesSync(): NotesSyncApi {
 
     return () => {
       disposed = true;
+      authRevision += 1;
       unsubscribeAuth?.();
       stopListeners();
       restartListenersRef.current = () => undefined;
@@ -481,14 +534,7 @@ export function useNotesSync(): NotesSyncApi {
     setSyncStatus('syncing');
     try {
       await authPersistenceReady;
-      const result = await signInWithPopup(firebaseAuth, googleProvider);
-      if (!isVerifiedGoogleUser(result.user)) {
-        await firebaseSignOut(firebaseAuth);
-        setAuthStatus('signed-out');
-        setUser(null);
-        setSyncStatus('error');
-        setError(verifiedGoogleMessage());
-      }
+      await signInWithPopup(firebaseAuth, googleProvider);
     } catch (signInError) {
       setAuthStatus(firebaseAuth.currentUser ? 'signed-in' : 'signed-out');
       setError(friendlyNotesError(signInError));
@@ -677,51 +723,25 @@ export function useNotesSync(): NotesSyncApi {
     }));
   }, [trackWrite]);
 
-  const permanentlyDeleteNote = useCallback(async (
-    id: string,
-    expectedRevision: number,
-  ) => {
-    const uid = activeUidRef.current;
-    if (!uid) throw new Error('Sign in before permanently deleting a note.');
-    assertRecordId(id, 'Note');
-    if (!isNoteRevision(expectedRevision)) {
-      throw new Error(`Note revision must be a whole number from 0 to ${MAX_NOTE_REVISION}.`);
-    }
-
-    const reference = doc(notesCollection(uid), id);
-    await trackWrite(runTransaction(notesFirestore, async (transaction) => {
-      const snapshot = await transaction.get(reference);
-      if (!snapshot.exists()) throw new Error('This note no longer exists in the cloud.');
-
-      const current = parseNoteRecord(snapshot.data(), id);
-      if (!current) throw new Error('This cloud note has an unsupported format.');
-      if (current.deleted !== true) {
-        throw new Error('Move this note to Trash before permanently deleting it.');
-      }
-      if (current.revision !== expectedRevision) {
-        throw new NoteConflictError(id, expectedRevision, current.revision);
-      }
-
-      transaction.delete(reference);
-    }));
-  }, [trackWrite]);
-
-  const createFolder = useCallback(async (name: string) => {
+  const createFolder = useCallback(async (name: string, color?: string) => {
     const uid = activeUidRef.current;
     if (!uid) throw new Error('Sign in before creating a folder.');
     assertText(name, 'Folder name');
     const cleanName = name.trim().slice(0, MAX_FOLDER_NAME_LENGTH).trim();
     if (!cleanName) throw new Error('Give the folder a name.');
+    if (color !== undefined && !isFolderColor(color)) {
+      throw new Error('Choose a valid folder color.');
+    }
 
     const colors = ['clay', 'moss', 'gold', 'blue', 'plum', 'stone'];
     const highestOrder = foldersRef.current.reduce((highest, folder) => Math.max(highest, folder.order), -1);
     const order = Math.min(MAX_FOLDER_ORDER, highestOrder + 1);
-    const color = colors[foldersRef.current.length % colors.length];
+    const folderColor = color ?? colors[foldersRef.current.length % colors.length];
     const reference = doc(foldersCollection(uid));
     await trackWrite(setDoc(reference, {
       id: reference.id,
       name: cleanName,
-      color,
+      color: folderColor,
       order,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -818,6 +838,7 @@ export function useNotesSync(): NotesSyncApi {
     authStatus,
     user,
     notes,
+    notesReady,
     folders,
     settings,
     syncStatus,
@@ -829,7 +850,6 @@ export function useNotesSync(): NotesSyncApi {
     createNote,
     updateNote,
     setNoteTrashed,
-    permanentlyDeleteNote,
     createFolder,
     updateFolder,
     updateSettings,

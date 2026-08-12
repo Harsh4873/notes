@@ -27,15 +27,17 @@ function makeNote(overrides: Partial<NoteRecord> = {}): NoteRecord {
   };
 }
 
-function useMockSync(notes: NoteRecord[]) {
+function useMockSync(notes: NoteRecord[], notesReady = true) {
   const api = {
     authStatus: 'signed-in',
     user: {
+      uid: 'owner-one',
       displayName: 'Test User',
       email: 'user.one@example.com',
       emailVerified: true,
     } as User,
     notes,
+    notesReady,
     folders: [],
     settings: {
       theme: 'system',
@@ -55,9 +57,8 @@ function useMockSync(notes: NoteRecord[]) {
       _trashed: boolean,
       expectedRevision: number,
     ) => expectedRevision + 1),
-    permanentlyDeleteNote: vi.fn(async () => undefined),
     retrySync: vi.fn(),
-    createFolder: vi.fn(async () => 'new-folder'),
+    createFolder: vi.fn(async (_name: string, _color?: string) => 'new-folder'),
     updateFolder: vi.fn(async () => undefined),
     updateSettings: vi.fn(async () => undefined),
   } satisfies NotesSyncApi;
@@ -108,7 +109,7 @@ afterEach(() => {
 });
 
 describe('Trash interactions', () => {
-  it('moves a live note to Trash only after a committed right swipe', async () => {
+  it('moves a live note to Trash only after a committed left swipe', async () => {
     const api = useMockSync([makeNote()]);
     render(<App />);
 
@@ -117,21 +118,21 @@ describe('Trash interactions', () => {
     expect(screen.getByRole('button', { name: 'Move Swipe me to Trash' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Delete Swipe me permanently/ })).not.toBeInTheDocument();
 
-    dispatchPointer(foreground!, 'pointerdown', 12, 40);
-    dispatchPointer(foreground!, 'pointermove', 52, 42);
-    dispatchPointer(foreground!, 'pointerup', 52, 42);
+    dispatchPointer(foreground!, 'pointerdown', 104, 40);
+    dispatchPointer(foreground!, 'pointermove', 70, 42);
+    dispatchPointer(foreground!, 'pointerup', 70, 42);
     expect(api.setNoteTrashed).not.toHaveBeenCalled();
 
-    dispatchPointer(foreground!, 'pointerdown', 12, 40);
-    dispatchPointer(foreground!, 'pointermove', 104, 42);
-    dispatchPointer(foreground!, 'pointerup', 104, 42);
+    dispatchPointer(foreground!, 'pointerdown', 104, 40);
+    dispatchPointer(foreground!, 'pointermove', 12, 42);
+    dispatchPointer(foreground!, 'pointerup', 12, 42);
 
     await waitFor(() => {
       expect(api.setNoteTrashed).toHaveBeenCalledWith('note-1', true, 0);
     });
   });
 
-  it('requires confirmation before permanently deleting a trashed note', async () => {
+  it('keeps trashed notes recoverable without exposing permanent deletion', async () => {
     const trashedNote = makeNote({
       id: 'trashed-note',
       title: 'Trashed thought',
@@ -143,30 +144,20 @@ describe('Trash interactions', () => {
     render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: /^Trash/ }));
-    fireEvent.click(screen.getByRole('button', {
-      name: 'Delete Trashed thought permanently',
-    }));
-
-    expect(screen.getByRole('dialog', { name: 'Permanently delete note' })).toBeInTheDocument();
-    expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
-    expect(api.permanentlyDeleteNote).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
+    const restoreButton = await screen.findByRole('button', { name: 'Restore Trashed thought' });
+    expect(screen.queryByRole('button', { name: /permanently/i })).not.toBeInTheDocument();
+    fireEvent.click(restoreButton);
 
     await waitFor(() => {
-      expect(api.permanentlyDeleteNote).toHaveBeenCalledWith('trashed-note', 3);
+      expect(api.setNoteTrashed).toHaveBeenCalledWith('trashed-note', false, 3);
     });
-    expect(screen.queryByRole('dialog', { name: 'Permanently delete note' })).not.toBeInTheDocument();
-    expect(screen.getByText('“Trashed thought” permanently deleted')).toBeInTheDocument();
   });
 });
 
 describe('Editor', () => {
-  it('opens a note into the rich text editor without blanking the app', async () => {
+  it('selects the first desktop note and opens the editor without blanking the app', async () => {
     useMockSync([makeNote()]);
     const { container } = render(<App />);
-
-    fireEvent.click(container.querySelector('.note-row-select') as HTMLElement);
 
     // A torn-down Tiptap editor (React StrictMode / Suspense reveal) used to
     // throw during mount and, with no error boundary, unmount the whole app to
@@ -175,5 +166,98 @@ describe('Editor', () => {
       expect(container.querySelector('.rich-text-editor')).not.toBeNull();
     });
     expect(screen.getByLabelText('Note title')).toBeInTheDocument();
+  });
+
+  it('creates inside the current label, focuses the blank title, and moves Enter into the body', async () => {
+    const planningNote = makeNote({ labels: ['Planning'] });
+    const api = useMockSync([planningNote]);
+    const { container, rerender } = render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Planning 1' }));
+    fireEvent.click(container.querySelector('.topbar-capture-button') as HTMLElement);
+
+    await waitFor(() => {
+      expect(api.createNote).toHaveBeenCalledWith(expect.objectContaining({
+        title: '',
+        folderId: 'inbox',
+        labels: ['Planning'],
+        pinned: false,
+        format: 'rich',
+      }));
+    });
+
+    api.notes = [...api.notes, makeNote({
+      id: 'new-note',
+      title: '',
+      content: '',
+      contentText: '',
+      labels: ['Planning'],
+    })];
+    rerender(<App />);
+
+    const title = await screen.findByLabelText('Note title');
+    await waitFor(() => expect(title).toHaveFocus());
+    const writingSurface = await waitFor(() => {
+      const surface = container.querySelector<HTMLElement>('.rich-text-editor__prose');
+      expect(surface).not.toBeNull();
+      return surface!;
+    });
+    fireEvent.keyDown(title, { key: 'Enter' });
+    expect(writingSurface).toHaveFocus();
+  });
+});
+
+describe('Workspace usability', () => {
+  it('distinguishes notes loading from a truly empty workspace', () => {
+    useMockSync([], false);
+    render(<App />);
+
+    expect(screen.getByRole('status', { name: 'Loading notes' })).toBeInTheDocument();
+    expect(screen.queryByText('A clear desk, for now')).not.toBeInTheDocument();
+  });
+
+  it('matches every search term across title and note body', async () => {
+    useMockSync([
+      makeNote({
+        id: 'match',
+        title: 'Trip checklist',
+        content: 'Pack the charger',
+        contentText: 'Pack the charger',
+        format: 'plain',
+      }),
+      makeNote({
+        id: 'miss',
+        title: 'Trip ideas',
+        content: 'Book a museum',
+        contentText: 'Book a museum',
+        format: 'plain',
+      }),
+    ]);
+    const { container } = render(<App />);
+
+    await waitFor(() => expect(container.querySelectorAll('.note-row')).toHaveLength(2));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search notes' }), {
+      target: { value: 'trip charger' },
+    });
+
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll('.note-row-top strong'))
+        .map((title) => title.textContent);
+      expect(titles).toEqual(['Trip checklist']);
+    });
+  });
+
+  it('creates folders with the selected color', async () => {
+    const api = useMockSync([]);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+    fireEvent.change(screen.getByLabelText('Folder name'), { target: { value: 'Ideas' } });
+    fireEvent.click(screen.getByRole('button', { name: 'moss folder color' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create folder' }));
+
+    await waitFor(() => {
+      expect(api.createFolder).toHaveBeenCalledWith('Ideas', 'moss');
+    });
   });
 });

@@ -77,6 +77,7 @@ export interface NotesSyncApi {
   authStatus: AuthStatus;
   user: User | null;
   notes: NoteRecord[];
+  notesReady: boolean;
   folders: FolderRecord[];
   settings: NotesSettings;
   syncStatus: NotesSyncStatus;
@@ -88,9 +89,8 @@ export interface NotesSyncApi {
   createNote: (input?: CreateNoteInput) => Promise<string>;
   updateNote: (id: string, patch: UpdateNotePatch, expectedRevision: number) => Promise<void>;
   setNoteTrashed: (id: string, trashed: boolean, expectedRevision: number) => Promise<number>;
-  permanentlyDeleteNote: (id: string, expectedRevision: number) => Promise<void>;
   retrySync: () => void;
-  createFolder: (name: string) => Promise<string>;
+  createFolder: (name: string, color?: string) => Promise<string>;
   updateFolder: (id: string, patch: UpdateFolderPatch) => Promise<void>;
   updateSettings: (patch: UpdateSettingsPatch) => Promise<void>;
 }

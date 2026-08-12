@@ -9,9 +9,9 @@ import { getFirestore } from 'firebase/firestore';
 
 export const APP_NAME = 'notes';
 
-// Notes shares the existing pickledgerpro Firebase project, but uses its
-// own named app and notes_users collection so its auth and data stay isolated
-// from the other harsh.bet tools on the same origin.
+// Notes shares the existing Firebase project, but uses its own named app and
+// notes_users collection so its auth and data stay isolated from the other
+// tools on the same origin.
 const firebaseConfig = {
   apiKey: 'AIzaSyATQK7NHNXIshlJIy7xT17z8Kr8fUWatLs',
   authDomain: 'pickledgerpro.firebaseapp.com',

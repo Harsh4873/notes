@@ -182,6 +182,7 @@ export function RichTextEditor({
   const onChangeRef = useRef(onChange);
   const onFormatChangeRef = useRef(onFormatChange);
   const onBlurRef = useRef(onBlur);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const [plainValue, setPlainValue] = useState(() =>
     format === 'plain' ? content : convertEditorContent(content, 'rich', 'plain').content,
   );
@@ -278,6 +279,14 @@ export function RichTextEditor({
     }, 1800);
     return () => window.clearTimeout(timeout);
   }, [smartMessage]);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const timer = window.setTimeout(() => {
+      moreMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [moreOpen]);
 
   useEffect(() => {
     if (!linkOpen && !moreOpen) return;
@@ -612,42 +621,6 @@ export function RichTextEditor({
           >
             <Table size={17} aria-hidden="true" />
           </ToolbarButton>
-          <ToolbarButton
-            label="Quote"
-            active={Boolean(editor?.isActive('blockquote'))}
-            disabled={!richEnabled}
-            className="rich-text-editor__tool--advanced"
-            onClick={() => editor?.chain().focus().toggleBlockquote().run()}
-          >
-            <Quotes size={17} aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            label="Inline code"
-            active={Boolean(editor?.isActive('code'))}
-            disabled={!richEnabled}
-            className="rich-text-editor__tool--advanced"
-            onClick={() => editor?.chain().focus().toggleCode().run()}
-          >
-            <Code size={17} aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            label="Code block"
-            active={Boolean(editor?.isActive('codeBlock'))}
-            disabled={!richEnabled}
-            className="rich-text-editor__tool--advanced"
-            onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
-          >
-            <CodeBlock size={17} aria-hidden="true" />
-          </ToolbarButton>
-          <ToolbarButton
-            label="Divider"
-            disabled={!richEnabled}
-            className="rich-text-editor__tool--advanced"
-            onClick={() => editor?.chain().focus().setHorizontalRule().run()}
-          >
-            <Minus size={17} weight="bold" aria-hidden="true" />
-          </ToolbarButton>
-
           <span className="rich-text-editor__separator" aria-hidden="true" />
 
           <ToolbarButton
@@ -689,11 +662,26 @@ export function RichTextEditor({
 
             {moreOpen ? (
               <div
+                ref={moreMenuRef}
                 className="rich-text-editor__more-menu"
                 id="rich-more-menu"
                 style={morePosition}
                 role="menu"
                 aria-label="More formatting"
+                onKeyDown={(event) => {
+                  const items = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+                  );
+                  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                  let nextIndex: number | undefined;
+                  if (event.key === 'ArrowDown') nextIndex = (index + 1) % items.length;
+                  if (event.key === 'ArrowUp') nextIndex = (index - 1 + items.length) % items.length;
+                  if (event.key === 'Home') nextIndex = 0;
+                  if (event.key === 'End') nextIndex = items.length - 1;
+                  if (nextIndex === undefined || items.length === 0) return;
+                  event.preventDefault();
+                  items[nextIndex]?.focus();
+                }}
               >
                 <button
                   type="button"

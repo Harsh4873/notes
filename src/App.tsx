@@ -279,7 +279,12 @@ interface NavButtonProps {
 
 function NavButton({ active, count, icon, label, onClick }: NavButtonProps) {
   return (
-    <button className={`nav-button ${active ? 'is-active' : ''}`} type="button" onClick={onClick}>
+    <button
+      className={`nav-button ${active ? 'is-active' : ''}`}
+      type="button"
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+    >
       <span className="nav-button-icon">{icon}</span>
       <span className="nav-button-label">{label}</span>
       {typeof count === 'number' && <span className="nav-button-count">{count}</span>}
@@ -303,11 +308,10 @@ interface SwipeableNoteRowProps {
   folderName: string;
   note: NoteRecord;
   onCopy: () => void;
-  onDeleteRequest: () => void;
+  onNavigate: (direction: -1 | 1) => void;
   onRestore: () => Promise<void>;
   onSelect: () => void;
   onTrash: () => Promise<void>;
-  permanentlyDeleting: boolean;
   selected: boolean;
 }
 
@@ -316,11 +320,10 @@ function SwipeableNoteRow({
   folderName,
   note,
   onCopy,
-  onDeleteRequest,
+  onNavigate,
   onRestore,
   onSelect,
   onTrash,
-  permanentlyDeleting,
   selected,
 }: SwipeableNoteRowProps) {
   const [swipeOffset, setSwipeOffset] = useState(0);
@@ -389,11 +392,11 @@ function SwipeableNoteRow({
 
     if (gesture.axis === 'pending') {
       if (Math.max(horizontalDistance, verticalDistance) < SWIPE_START_DISTANCE) return;
-      if (deltaX <= 0 || verticalDistance >= horizontalDistance) {
+      if (deltaX >= 0 || verticalDistance >= horizontalDistance) {
         gesture.axis = 'vertical';
         return;
       }
-      if (deltaX <= verticalDistance * 1.25) return;
+      if (-deltaX <= verticalDistance * 1.25) return;
       gesture.axis = 'horizontal';
       setGestureActive(true);
       try {
@@ -405,7 +408,7 @@ function SwipeableNoteRow({
 
     if (gesture.axis !== 'horizontal') return;
     event.preventDefault();
-    updateSwipeOffset(Math.min(SWIPE_MAX_DISTANCE, Math.max(0, deltaX)));
+    updateSwipeOffset(Math.max(-SWIPE_MAX_DISTANCE, Math.min(0, deltaX)));
   };
 
   const finishPointerGesture = (
@@ -428,12 +431,12 @@ function SwipeableNoteRow({
     const wasHorizontal = gesture.axis === 'horizontal';
     const shouldTrash = !cancelled
       && wasHorizontal
-      && swipeOffsetRef.current >= SWIPE_COMMIT_DISTANCE;
+      && swipeOffsetRef.current <= -SWIPE_COMMIT_DISTANCE;
     setGestureActive(false);
 
     if (wasHorizontal) suppressSyntheticClick();
     if (shouldTrash) {
-      updateSwipeOffset(SWIPE_MAX_DISTANCE);
+      updateSwipeOffset(-SWIPE_MAX_DISTANCE);
       void moveToTrash();
     } else {
       updateSwipeOffset(0);
@@ -441,13 +444,14 @@ function SwipeableNoteRow({
   };
 
   const title = note.title || 'Untitled note';
-  const busy = actionPending || permanentlyDeleting;
+  const busy = actionPending;
 
   return (
     <article
       role="listitem"
       className={`note-row ${selected ? 'is-selected' : ''} ${gestureActive ? 'is-gesture-active' : ''}`}
       aria-busy={busy || undefined}
+      data-note-id={note.id}
     >
       {canSwipeToTrash && (
         <div className="note-row-swipe-action" aria-hidden="true">
@@ -477,6 +481,11 @@ function SwipeableNoteRow({
             onSelect();
           }}
           aria-current={selected ? 'true' : undefined}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+            event.preventDefault();
+            onNavigate(event.key === 'ArrowDown' ? 1 : -1);
+          }}
         >
           <span className="note-row-top">
             <strong>{title}</strong>
@@ -484,7 +493,17 @@ function SwipeableNoteRow({
           </span>
           <time>{displayDate(note.updatedAt)}</time>
           <span className="note-preview">{cleanPreview(note.contentText)}</span>
-          <span className="note-row-footer"><span>{folderName}</span></span>
+          <span className="note-row-footer">
+            <span className="note-row-folder">{folderName}</span>
+            {note.labels.length > 0 && (
+              <span className="note-row-labels" aria-label={`Labels: ${note.labels.join(', ')}`}>
+                {note.labels.slice(0, 2).map((label) => (
+                  <span key={label} className={`tone-${labelColor(label)}`}>{label}</span>
+                ))}
+                {note.labels.length > 2 && <span>+{note.labels.length - 2}</span>}
+              </span>
+            )}
+          </span>
         </button>
 
         <div className="note-row-actions">
@@ -499,13 +518,13 @@ function SwipeableNoteRow({
                 onClick={() => void restore()}
               ><ArrowCounterClockwise aria-hidden="true" /></button>
               <button
-                className="note-row-action is-danger"
+                className="note-row-action"
                 type="button"
-                title="Delete permanently"
-                aria-label={`Delete ${title} permanently`}
+                title="Copy note"
+                aria-label={`Copy ${title}`}
                 disabled={busy}
-                onClick={onDeleteRequest}
-              ><Trash aria-hidden="true" /></button>
+                onClick={onCopy}
+              ><Copy aria-hidden="true" /></button>
             </>
           ) : (
             <>
@@ -665,6 +684,7 @@ export function App() {
   const [quickText, setQuickText] = useState('');
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0]);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
@@ -673,11 +693,10 @@ export function App() {
   const [noteDetailsOpen, setNoteDetailsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>('notes');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [localTitle, setLocalTitle] = useState('');
   const [toast, setToast] = useState<ToastState>();
-  const [deleteCandidate, setDeleteCandidate] = useState<NoteRecord>();
-  const [permanentlyDeletingNoteId, setPermanentlyDeletingNoteId] = useState<string>();
-  const [permanentDeleteError, setPermanentDeleteError] = useState<string>();
+  const [conflictReviewOpen, setConflictReviewOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, Partial<NoteRecord>>>({});
   const [saveRevision, setSaveRevision] = useState(0);
@@ -687,6 +706,7 @@ export function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const quickRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  const editorPanelRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const profileWrapRef = useRef<HTMLDivElement>(null);
@@ -703,6 +723,63 @@ export function App() {
   const acknowledgedRevisions = useRef(new Map<string, number>());
   const retryCounts = useRef(new Map<string, number>());
   const cloudNotesRef = useRef<NoteRecord[]>([]);
+  const workspaceUidRef = useRef<string | undefined>(undefined);
+  const workspaceGenerationRef = useRef(0);
+  const newNoteFocusIdRef = useRef<string | undefined>(undefined);
+  const newNoteFocusTimerRef = useRef<number | undefined>(undefined);
+  const focusCreatedTitleRef = useRef(false);
+  const autoTitleNoteIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    const nextUid = sync.user?.uid;
+    if (workspaceUidRef.current === nextUid) return;
+
+    // App-owned drafts and capture text are deliberately in memory only. Clear
+    // them at every authentication boundary so one account can never inherit
+    // another account's unfinished writing or filters in the same tab.
+    saveTimers.current.forEach((timer) => window.clearTimeout(timer));
+    saveTimers.current.clear();
+    pendingPatches.current.clear();
+    inFlightNotes.current.clear();
+    inFlightPromises.current.clear();
+    saveErrors.current.clear();
+    acknowledgedRevisions.current.clear();
+    retryCounts.current.clear();
+    workspaceGenerationRef.current += 1;
+    setNoteDrafts({});
+    setSaveConflicts({});
+    setLocalSaveError(undefined);
+    setSearch('');
+    setQuickText('');
+    setQuickCaptureOpen(false);
+    setNewFolderOpen(false);
+    setNewFolderName('');
+    setNewFolderColor(FOLDER_COLORS[0]);
+    setFolderMenuOpen(false);
+    setLabelsOpen(false);
+    setLabelDraft('');
+    setProfileOpen(false);
+    setThemeMenuOpen(false);
+    setNoteDetailsOpen(false);
+    setListOptionsOpen(false);
+    setConflictReviewOpen(false);
+    setCreating(false);
+    setToast(undefined);
+    setActiveNoteId(undefined);
+    setView('inbox');
+    setNoteSort('recent');
+    setFormatFilter('all');
+    setMobileNavOpen(false);
+    setMobilePane('notes');
+    setSidebarCollapsed(false);
+    setLocalTitle('');
+    if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
+    newNoteFocusTimerRef.current = undefined;
+    newNoteFocusIdRef.current = undefined;
+    focusCreatedTitleRef.current = false;
+    autoTitleNoteIdRef.current = undefined;
+    workspaceUidRef.current = nextUid;
+  }, [sync.user?.uid]);
 
   const cloudNotes = sync.notes ?? [];
   cloudNotesRef.current = cloudNotes;
@@ -710,6 +787,9 @@ export function App() {
     ...note,
     ...noteDrafts[note.id],
   })), [cloudNotes, noteDrafts]);
+  const conflictNote = saveConflict
+    ? allNotes.find((note) => note.id === saveConflict.noteId)
+    : undefined;
   // Every view except Trash works from live notes only, so a trashed note can
   // never resurface in Inbox, a folder, a label, search, or a count.
   const notes = useMemo(() => allNotes.filter((note) => note.deleted !== true), [allNotes]);
@@ -729,15 +809,21 @@ export function App() {
   }, [notes]);
 
   const visibleNotes = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
+    const searchTerms = search
+      .trim()
+      .toLocaleLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
     const inTrashView = view === 'trash';
     return (inTrashView ? trashedNotes : notes)
       .filter((note) => {
         if (formatFilter !== 'all' && note.format !== formatFilter) return false;
-        if (normalizedSearch) {
+        if (searchTerms.length > 0) {
           const folderName = folders.find((folder) => folder.id === note.folderId)?.name ?? '';
-          return [note.title, note.contentText, folderName, ...note.labels]
-            .some((value) => value.toLowerCase().includes(normalizedSearch));
+          const searchableText = [note.title, note.contentText, folderName, ...note.labels]
+            .join('\n')
+            .toLocaleLowerCase();
+          return searchTerms.every((term) => searchableText.includes(term));
         }
         if (inTrashView) return true;
         if (view === 'inbox') return note.folderId === 'inbox';
@@ -754,11 +840,64 @@ export function App() {
       });
   }, [folders, formatFilter, noteSort, notes, search, trashedNotes, view]);
 
+  const visiblePinnedNotes = useMemo(
+    () => visibleNotes.filter((note) => note.pinned && note.deleted !== true),
+    [visibleNotes],
+  );
+  const visibleRegularNotes = useMemo(
+    () => visibleNotes.filter((note) => !note.pinned || note.deleted === true),
+    [visibleNotes],
+  );
+  const showPinnedSection = view !== 'trash' && visiblePinnedNotes.length > 0;
+
   const counts = useMemo(() => ({
     inbox: notes.filter((note) => note.folderId === 'inbox').length,
     pinned: notes.filter((note) => note.pinned).length,
     trash: trashedNotes.length,
   }), [notes, trashedNotes]);
+
+  useEffect(() => {
+    if (!sync.notesReady || isMobileLayout) return;
+    // Firestore creation resolves before its snapshot necessarily reaches this
+    // render. Keep the just-created id selected during that short listener gap.
+    if (activeNoteId && newNoteFocusIdRef.current === activeNoteId) return;
+    const activeIsVisible = activeNoteId
+      ? visibleNotes.some((note) => note.id === activeNoteId)
+      : false;
+    if (activeIsVisible) return;
+    setActiveNoteId(visibleNotes[0]?.id);
+  }, [activeNoteId, isMobileLayout, sync.notesReady, visibleNotes]);
+
+  useEffect(() => {
+    if (!activeNote || newNoteFocusIdRef.current !== activeNote.id) return;
+    if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
+    newNoteFocusTimerRef.current = undefined;
+    newNoteFocusIdRef.current = undefined;
+    if (!focusCreatedTitleRef.current) return;
+    focusCreatedTitleRef.current = false;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: number | undefined;
+    const focusWhenReady = () => {
+      if (cancelled) return;
+      if (titleRef.current) {
+        titleRef.current.focus();
+        titleRef.current.select();
+        return;
+      }
+      attempts += 1;
+      if (attempts < 50) timer = window.setTimeout(focusWhenReady, 40);
+    };
+    timer = window.setTimeout(focusWhenReady, 0);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [activeNote?.id]);
+
+  useEffect(() => {
+    if (!saveConflict) setConflictReviewOpen(false);
+  }, [saveConflict]);
 
   const showToast = useCallback((message: string, action?: Omit<ToastState, 'message'>) => {
     const next: ToastState = { message, ...action };
@@ -770,6 +909,30 @@ export function App() {
       lifetime,
     );
   }, []);
+
+  const clearPendingCreatedNote = useCallback(() => {
+    if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
+    newNoteFocusTimerRef.current = undefined;
+    newNoteFocusIdRef.current = undefined;
+    focusCreatedTitleRef.current = false;
+  }, []);
+
+  const waitForCreatedNote = useCallback((noteId: string, focusTitle: boolean) => {
+    clearPendingCreatedNote();
+    newNoteFocusIdRef.current = noteId;
+    focusCreatedTitleRef.current = focusTitle;
+    const generation = workspaceGenerationRef.current;
+    newNoteFocusTimerRef.current = window.setTimeout(() => {
+      if (
+        workspaceGenerationRef.current !== generation
+        || newNoteFocusIdRef.current !== noteId
+      ) return;
+      clearPendingCreatedNote();
+      setActiveNoteId((current) => (current === noteId ? undefined : current));
+      setMobilePane('notes');
+      showToast('That note is still waiting to sync. Check the connection and try again.');
+    }, 10_000);
+  }, [clearPendingCreatedNote, showToast]);
 
   const touchSaveState = useCallback(() => {
     setSaveRevision((revision) => revision + 1);
@@ -786,7 +949,9 @@ export function App() {
   const scheduleFlush = useCallback((noteId: string, delay: number) => {
     const currentTimer = saveTimers.current.get(noteId);
     if (currentTimer) window.clearTimeout(currentTimer);
+    const generation = workspaceGenerationRef.current;
     saveTimers.current.set(noteId, window.setTimeout(() => {
+      if (workspaceGenerationRef.current !== generation) return;
       saveTimers.current.delete(noteId);
       touchSaveState();
       void flushNoteRef.current(noteId);
@@ -811,12 +976,14 @@ export function App() {
     pendingPatches.current.delete(noteId);
     inFlightNotes.current.set(noteId, pending);
     touchSaveState();
+    const generation = workspaceGenerationRef.current;
 
     const operation = (async () => {
       let shouldContinue = true;
       let retryDelay = 250;
       try {
         await sync.updateNote(noteId, pending.patch, pending.expectedRevision);
+        if (workspaceGenerationRef.current !== generation) return;
         retryCounts.current.delete(noteId);
         acknowledgedRevisions.current.set(
           noteId,
@@ -841,6 +1008,7 @@ export function App() {
           });
         }
       } catch (saveError) {
+        if (workspaceGenerationRef.current !== generation) return;
         const newer = pendingPatches.current.get(noteId);
         pendingPatches.current.set(noteId, {
           expectedRevision: pending.expectedRevision,
@@ -882,6 +1050,7 @@ export function App() {
           shouldContinue = false;
         }
       } finally {
+        if (workspaceGenerationRef.current !== generation) return;
         inFlightNotes.current.delete(noteId);
         inFlightPromises.current.delete(noteId);
         touchSaveState();
@@ -1154,19 +1323,44 @@ export function App() {
   }, [flushAllNotes]);
 
   const chooseView = (nextView: ViewKey) => {
+    clearPendingCreatedNote();
+    autoTitleNoteIdRef.current = undefined;
     if (activeNoteId) void flushNote(activeNoteId);
     setView(nextView);
     setMobileNavOpen(false);
     setMobilePane('notes');
-    setActiveNoteId(undefined);
+    if (isMobileLayout) setActiveNoteId(undefined);
     setNoteDetailsOpen(false);
   };
 
   const selectNote = (noteId: string) => {
+    if (noteId !== activeNoteId) {
+      clearPendingCreatedNote();
+      autoTitleNoteIdRef.current = undefined;
+    }
     if (activeNoteId && activeNoteId !== noteId) void flushNote(activeNoteId);
     setActiveNoteId(noteId);
     setMobilePane('editor');
     setNoteDetailsOpen(false);
+  };
+
+  const navigateNoteList = (noteId: string, direction: -1 | 1) => {
+    const currentIndex = visibleNotes.findIndex((note) => note.id === noteId);
+    const nextNote = visibleNotes[currentIndex + direction];
+    if (!nextNote) return;
+    selectNote(nextNote.id);
+    window.setTimeout(() => {
+      Array.from(document.querySelectorAll<HTMLElement>('.note-row'))
+        .find((row) => row.dataset.noteId === nextNote.id)
+        ?.querySelector<HTMLElement>('.note-row-select')
+        ?.focus();
+    }, 0);
+  };
+
+  const focusWritingSurface = () => {
+    editorPanelRef.current
+      ?.querySelector<HTMLElement>('.rich-text-editor__prose, .rich-text-editor__surface--plain textarea')
+      ?.focus();
   };
 
   async function createNewNote() {
@@ -1175,26 +1369,36 @@ export function App() {
       showToast('Reconnect before creating a note — offline drafts are intentionally not stored here');
       return;
     }
+    clearPendingCreatedNote();
+    autoTitleNoteIdRef.current = undefined;
+    const generation = workspaceGenerationRef.current;
     setCreating(true);
     try {
       const folderId = view.startsWith('folder:') ? view.slice(7) : 'inbox';
+      const inheritedLabels = view.startsWith('label:') ? [view.slice(6)] : [];
+      const format = formatFilter === 'plain' ? 'plain' : 'rich';
       // Trash can never list a live note, so a new note leaves that view with it.
       if (view === 'trash') setView('inbox');
+      if (search) setSearch('');
+      setNoteSort('recent');
       const id = await sync.createNote({
-        title: 'Untitled note',
+        title: '',
         content: '',
         contentText: '',
-        format: 'rich',
+        format,
         folderId,
-        labels: [],
-        pinned: false,
+        labels: inheritedLabels,
+        pinned: view === 'pinned',
       });
+      if (workspaceGenerationRef.current !== generation) return;
+      waitForCreatedNote(id, true);
+      autoTitleNoteIdRef.current = id;
       setActiveNoteId(id);
       setMobilePane('editor');
     } catch {
-      showToast('Could not create the note');
+      if (workspaceGenerationRef.current === generation) showToast('Could not create the note');
     } finally {
-      setCreating(false);
+      if (workspaceGenerationRef.current === generation) setCreating(false);
     }
   }
 
@@ -1206,6 +1410,9 @@ export function App() {
       showToast('Reconnect to capture this note safely');
       return;
     }
+    clearPendingCreatedNote();
+    autoTitleNoteIdRef.current = undefined;
+    const generation = workspaceGenerationRef.current;
     setCreating(true);
     try {
       const rich = plainTextToRichContent(text, settings.smartFormatting);
@@ -1218,16 +1425,21 @@ export function App() {
         labels: [],
         pinned: false,
       });
+      if (workspaceGenerationRef.current !== generation) return;
       setQuickText('');
       setQuickCaptureOpen(false);
+      setSearch('');
       setView('inbox');
+      setNoteSort('recent');
+      setFormatFilter('all');
+      waitForCreatedNote(id, false);
       setActiveNoteId(id);
       setMobilePane('editor');
       showToast('Captured and syncing');
     } catch {
-      showToast('Could not capture that note');
+      if (workspaceGenerationRef.current === generation) showToast('Could not capture that note');
     } finally {
-      setCreating(false);
+      if (workspaceGenerationRef.current === generation) setCreating(false);
     }
   };
 
@@ -1235,24 +1447,28 @@ export function App() {
     event.preventDefault();
     const name = newFolderName.trim();
     if (!name) return;
+    const generation = workspaceGenerationRef.current;
     try {
-      const id = await sync.createFolder(name);
+      const id = await sync.createFolder(name, newFolderColor);
+      if (workspaceGenerationRef.current !== generation) return;
       setNewFolderName('');
+      setNewFolderColor(FOLDER_COLORS[0]);
       setNewFolderOpen(false);
       chooseView(`folder:${id}`);
     } catch {
-      showToast('Could not create that folder');
+      if (workspaceGenerationRef.current === generation) showToast('Could not create that folder');
     }
   };
 
   const copyNote = async (note: NoteRecord) => {
+    const generation = workspaceGenerationRef.current;
     const body = note.format === 'rich' ? richContentToPlainText(note.content) : note.content;
     const value = [note.title, body].filter(Boolean).join('\n\n');
     try {
       await navigator.clipboard.writeText(value);
-      showToast('Copied to clipboard');
+      if (workspaceGenerationRef.current === generation) showToast('Copied to clipboard');
     } catch {
-      showToast('Clipboard permission is blocked');
+      if (workspaceGenerationRef.current === generation) showToast('Clipboard permission is blocked');
     }
   };
 
@@ -1278,13 +1494,16 @@ export function App() {
   }, []);
 
   const setTrashed = useCallback(async (note: NoteRecord, trashed: boolean) => {
+    const generation = workspaceGenerationRef.current;
     try {
       await flushNoteForAction(note.id);
+      if (workspaceGenerationRef.current !== generation) return false;
       const revision = await sync.setNoteTrashed(
         note.id,
         trashed,
         freshestRevision(note.id, note.revision),
       );
+      if (workspaceGenerationRef.current !== generation) return false;
       forgetDraft(note.id);
       // The transaction can finish before its listener snapshot is rendered.
       // Keep the committed revision so an immediate Undo never looks stale.
@@ -1322,55 +1541,23 @@ export function App() {
     showToast(`“${note.title || 'Untitled note'}” restored`);
   }, [activeNoteId, isMobileLayout, setTrashed, showToast]);
 
-  const requestPermanentDelete = useCallback((note: NoteRecord) => {
-    if (note.deleted !== true) return;
-    setPermanentDeleteError(undefined);
-    setDeleteCandidate(note);
-  }, []);
-
-  const closePermanentDelete = useCallback(() => {
-    if (permanentlyDeletingNoteId) return;
-    setPermanentDeleteError(undefined);
-    setDeleteCandidate(undefined);
-  }, [permanentlyDeletingNoteId]);
-
-  const confirmPermanentDelete = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const candidate = deleteCandidate;
-    if (!candidate || permanentlyDeletingNoteId) return;
-
-    setPermanentDeleteError(undefined);
-    setPermanentlyDeletingNoteId(candidate.id);
-    try {
-      await flushNoteForAction(candidate.id);
-      await sync.permanentlyDeleteNote(
-        candidate.id,
-        freshestRevision(candidate.id, candidate.revision),
-      );
-      forgetDraft(candidate.id);
-      setActiveNoteId((current) => (current === candidate.id ? undefined : current));
-      setNoteDetailsOpen(false);
-      if (isMobileLayout) setMobilePane('notes');
-      setDeleteCandidate(undefined);
-      showToast(`“${candidate.title || 'Untitled note'}” permanently deleted`);
-    } catch (deleteError) {
-      setPermanentDeleteError(saveErrors.current.has(candidate.id)
-        ? 'This note has an unsaved edit. Resolve it before permanently deleting the note.'
-        : isConflictError(deleteError)
-          ? 'This note changed on another device. Close this dialog, reopen it, and try again.'
-          : 'Could not permanently delete this note. Check your connection and try again.');
-    } finally {
-      setPermanentlyDeletingNoteId(undefined);
-    }
-  };
-
   const saveEditorChange = (change: EditorChange) => {
     if (!activeNote) return;
-    queueNotePatch(activeNote.id, {
+    const patch: Partial<NoteRecord> = {
       content: change.content,
       contentText: change.contentText,
       format: change.format,
-    });
+    };
+    if (autoTitleNoteIdRef.current === activeNote.id) {
+      const derivedTitle = change.contentText.trim()
+        ? noteTitleFromText(change.contentText)
+        : '';
+      if (derivedTitle !== activeNote.title) {
+        patch.title = derivedTitle;
+        setLocalTitle(derivedTitle);
+      }
+    }
+    queueNotePatch(activeNote.id, patch);
   };
 
   const saveEditorFormat = (change: EditorChange) => {
@@ -1404,28 +1591,27 @@ export function App() {
   };
 
   const setThemePreference = (next: ThemePreference) => {
+    const generation = workspaceGenerationRef.current;
     setThemeMenuOpen(false);
     void sync.updateSettings({ theme: next }).catch(() => {
-      showToast('Could not save the theme');
+      if (workspaceGenerationRef.current === generation) showToast('Could not save the theme');
     });
     showToast(`${next[0].toUpperCase()}${next.slice(1)} theme`);
   };
 
-  const cycleTheme = () => {
-    const themes: ThemePreference[] = ['system', 'light', 'dark'];
-    setThemePreference(themes[(themes.indexOf(settings.theme) + 1) % themes.length]);
-  };
-
   const retrySaving = async () => {
+    const generation = workspaceGenerationRef.current;
     saveErrors.current.clear();
     setLocalSaveError(undefined);
     setSaveConflicts({});
     sync.retrySync();
     await flushAllNotes();
+    if (workspaceGenerationRef.current !== generation) return;
   };
 
   const keepLocalConflict = async () => {
     if (!saveConflict) return;
+    const generation = workspaceGenerationRef.current;
     const pending = pendingPatches.current.get(saveConflict.noteId);
     const cloudRevision = saveConflict.currentRevision
       ?? cloudNotesRef.current.find((note) => note.id === saveConflict.noteId)?.revision;
@@ -1442,6 +1628,7 @@ export function App() {
     });
     touchSaveState();
     await flushNote(saveConflict.noteId);
+    if (workspaceGenerationRef.current === generation) setConflictReviewOpen(false);
   };
 
   const reloadCloudConflict = () => {
@@ -1467,12 +1654,15 @@ export function App() {
     // sync hook stops reporting it and re-reads the cloud copy it just kept.
     sync.retrySync();
     touchSaveState();
+    setConflictReviewOpen(false);
     showToast('Loaded the version from your other device');
   };
 
   const signOut = async () => {
+    const generation = workspaceGenerationRef.current;
     try {
       await flushAllNotes();
+      if (workspaceGenerationRef.current !== generation) return;
       if (pendingPatches.current.size || saveTimers.current.size || inFlightNotes.current.size) {
         setLocalSaveError('Finish saving or resolve the note conflict before signing out.');
         return;
@@ -1496,6 +1686,21 @@ export function App() {
         : sync.syncStatus;
   const visibleSyncError = saveConflict?.message ?? localSaveError ?? sync.error;
   const offline = effectiveSyncStatus === 'offline';
+  const renderNoteRow = (note: NoteRecord) => (
+    <SwipeableNoteRow
+      key={note.id}
+      note={note}
+      folderName={folders.find((folder) => folder.id === note.folderId)?.name
+        || (note.folderId === 'inbox' ? 'Inbox' : 'Unfiled')}
+      selected={note.id === activeNoteId}
+      canSwipeToTrash={view !== 'trash' && note.deleted !== true}
+      onSelect={() => selectNote(note.id)}
+      onNavigate={(direction) => navigateNoteList(note.id, direction)}
+      onCopy={() => void copyNote(note)}
+      onTrash={() => trashNote(note)}
+      onRestore={() => restoreNote(note)}
+    />
+  );
 
   const authLoading = sync.authStatus === 'loading';
   if (sync.authStatus !== 'signed-in' || !sync.user) {
@@ -1508,14 +1713,16 @@ export function App() {
     );
   }
 
+  const mobileChromeHidden = isMobileLayout && (mobileNavOpen || mobilePane === 'editor');
+
   return (
-    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
+    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
       <aside
         ref={sidebarRef}
         className="sidebar"
         aria-label="Notes navigation"
-        aria-hidden={isMobileLayout && !mobileNavOpen ? 'true' : undefined}
-        inert={isMobileLayout && !mobileNavOpen}
+        aria-hidden={(isMobileLayout && !mobileNavOpen) || (!isMobileLayout && sidebarCollapsed) ? 'true' : undefined}
+        inert={(isMobileLayout && !mobileNavOpen) || (!isMobileLayout && sidebarCollapsed)}
       >
         <div className="sidebar-brand-row">
           <button className="mobile-close-button" type="button" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation">
@@ -1562,6 +1769,7 @@ export function App() {
                 key={label.name}
                 type="button"
                 className={`label-nav-row ${view === `label:${label.name}` ? 'is-active' : ''}`}
+                aria-current={view === `label:${label.name}` ? 'page' : undefined}
                 onClick={() => chooseView(`label:${label.name}`)}
               >
                 <span className={`label-dot tone-${labelColor(label.name)}`} />
@@ -1580,8 +1788,18 @@ export function App() {
         </button>
       </aside>
 
-      <header className="topbar" aria-hidden={isMobileLayout && mobileNavOpen ? 'true' : undefined} inert={isMobileLayout && mobileNavOpen}>
-        <button ref={mobileMenuButtonRef} className="mobile-menu-button" type="button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation">
+      <header className="topbar" aria-hidden={mobileChromeHidden ? 'true' : undefined} inert={mobileChromeHidden}>
+        <button
+          ref={mobileMenuButtonRef}
+          className="mobile-menu-button workspace-menu-button"
+          type="button"
+          onClick={() => {
+            if (isMobileLayout) setMobileNavOpen(true);
+            else setSidebarCollapsed((collapsed) => !collapsed);
+          }}
+          aria-label={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show navigation' : 'Hide navigation'}
+          title={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+        >
           <SidebarSimple aria-hidden="true" />
         </button>
         <label className="search-field">
@@ -1592,20 +1810,27 @@ export function App() {
             value={search}
             onFocus={() => setMobilePane('notes')}
             onChange={(event) => {
+              clearPendingCreatedNote();
+              autoTitleNoteIdRef.current = undefined;
               setSearch(event.target.value);
               setMobilePane('notes');
             }}
             placeholder="Search notes…"
             aria-label="Search notes"
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              if (search) setSearch('');
+              else event.currentTarget.blur();
+            }}
           />
           {search ? (
             <button type="button" onClick={() => setSearch('')} aria-label="Clear search"><X aria-hidden="true" /></button>
           ) : <kbd>⌘K</kbd>}
         </label>
 
-        <button className="topbar-capture-button" type="button" onClick={() => setQuickCaptureOpen(true)}>
-          <Lightning weight="fill" aria-hidden="true" />
-          <span>Quick capture</span>
+        <button className="topbar-capture-button" type="button" onClick={() => void createNewNote()}>
+          <NotePencil aria-hidden="true" />
+          <span>New note</span>
         </button>
 
         <button
@@ -1637,7 +1862,7 @@ export function App() {
           {themeMenuOpen && (
             <div className="theme-menu popover" id="theme-menu" role="dialog" aria-label="Choose theme">
               {(['system', 'light', 'dark'] as ThemePreference[]).map((theme) => (
-                <button key={theme} type="button" onClick={() => setThemePreference(theme)}>
+                <button key={theme} type="button" aria-pressed={settings.theme === theme} onClick={() => setThemePreference(theme)}>
                   <ThemeIcon theme={theme} />
                   <span>{theme[0].toUpperCase()}{theme.slice(1)}</span>
                   {settings.theme === theme && <Check aria-hidden="true" />}
@@ -1665,15 +1890,12 @@ export function App() {
       </header>
 
       {visibleSyncError && (
-        <div className="sync-error-banner" role="alert" aria-hidden={isMobileLayout && mobileNavOpen ? 'true' : undefined} inert={isMobileLayout && mobileNavOpen}>
+        <div className="sync-error-banner" role="alert" aria-hidden={mobileChromeHidden ? 'true' : undefined} inert={mobileChromeHidden}>
           <WarningCircle aria-hidden="true" />
           <span>{visibleSyncError}</span>
           <div className="sync-error-actions">
             {saveConflict ? (
-              <>
-              <button type="button" onClick={() => void keepLocalConflict()}>Keep this version</button>
-              <button type="button" onClick={reloadCloudConflict}>Load cloud version</button>
-              </>
+              <button type="button" onClick={() => setConflictReviewOpen(true)}>Review conflict</button>
             ) : (
               <button type="button" onClick={() => void retrySaving()}>Retry</button>
             )}
@@ -1689,9 +1911,9 @@ export function App() {
       >
         <header className="note-list-header">
           <div>
-            <button className="mobile-list-back" type="button" onClick={() => setMobileNavOpen(true)}><SidebarSimple aria-hidden="true" /></button>
+            <button className="mobile-list-back" type="button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><SidebarSimple aria-hidden="true" /></button>
             <h2>{search ? 'Search results' : viewTitle(view, folders)}</h2>
-            <span>{visibleNotes.length}</span>
+            <span>{sync.notesReady ? visibleNotes.length : '…'}</span>
           </div>
           <div className="list-options-wrap" ref={listOptionsRef}>
             <button
@@ -1753,36 +1975,44 @@ export function App() {
         </header>
 
         <div className="note-list" role="list">
-          {visibleNotes.map((note) => (
-            <SwipeableNoteRow
-              key={note.id}
-              note={note}
-              folderName={folders.find((folder) => folder.id === note.folderId)?.name
-                || (note.folderId === 'inbox' ? 'Inbox' : 'Unfiled')}
-              selected={note.id === activeNoteId}
-              canSwipeToTrash={view !== 'trash' && note.deleted !== true}
-              permanentlyDeleting={permanentlyDeletingNoteId === note.id}
-              onSelect={() => selectNote(note.id)}
-              onCopy={() => void copyNote(note)}
-              onTrash={() => trashNote(note)}
-              onRestore={() => restoreNote(note)}
-              onDeleteRequest={() => requestPermanentDelete(note)}
-            />
-          ))}
+          {!sync.notesReady ? (
+            <div className="note-list-loading" role="status" aria-label="Loading notes">
+              <span>Gathering your notes…</span>
+              {[0, 1, 2, 3].map((item) => <i key={item} aria-hidden="true" />)}
+            </div>
+          ) : (
+            <>
+              {showPinnedSection && (
+                <section className="note-list-section" aria-labelledby="pinned-notes-heading">
+                  <h3 id="pinned-notes-heading"><PushPin weight="fill" aria-hidden="true" />Pinned</h3>
+                  {visiblePinnedNotes.map(renderNoteRow)}
+                </section>
+              )}
+              {visibleRegularNotes.length > 0 && (
+                <section
+                  className="note-list-section"
+                  aria-labelledby={showPinnedSection ? 'regular-notes-heading' : undefined}
+                >
+                  {showPinnedSection && <h3 id="regular-notes-heading">Notes</h3>}
+                  {visibleRegularNotes.map(renderNoteRow)}
+                </section>
+              )}
+            </>
+          )}
 
-          {visibleNotes.length === 0 && (
+          {sync.notesReady && visibleNotes.length === 0 && (
             view === 'trash' && !search ? (
               <div className="empty-list">
                 <span><Trash aria-hidden="true" /></span>
                 <h3>Trash is empty</h3>
-                <p>Notes stay here until you restore them or permanently delete them.</p>
+                <p>Removed notes stay recoverable here until you restore them.</p>
               </div>
             ) : (
               <div className="empty-list">
                 <span><ListBullets aria-hidden="true" /></span>
                 <h3>{search ? 'No notes match that search' : 'A clear desk, for now'}</h3>
                 <p>{search ? 'Try a different word, folder, or label.' : 'Capture a thought and it will appear here on every signed-in device.'}</p>
-                {!search && <button type="button" onClick={() => setQuickCaptureOpen(true)}>Quick capture</button>}
+                {!search && <button type="button" onClick={() => void createNewNote()}>Write a note</button>}
               </div>
             )
           )}
@@ -1794,7 +2024,8 @@ export function App() {
       </section>
 
       <section
-        className="editor-panel"
+        ref={editorPanelRef}
+        className={`editor-panel ${activeNote?.labels.length ? 'has-labels' : ''} ${activeNoteTrashed ? 'has-trash-banner' : ''}`}
         aria-label="Note editor"
         aria-hidden={isMobileLayout && (mobileNavOpen || mobilePane === 'notes') ? 'true' : undefined}
         inert={isMobileLayout && (mobileNavOpen || mobilePane === 'notes')}
@@ -1834,6 +2065,35 @@ export function App() {
                 <button className={`icon-button ${activeNote.pinned ? 'is-active' : ''}`} type="button" onClick={() => queueNotePatch(activeNote.id, { pinned: !activeNote.pinned })} aria-label={activeNote.pinned ? 'Unpin note' : 'Pin note'} title={activeNote.pinned ? 'Unpin note' : 'Pin note'}>
                   <PushPin weight={activeNote.pinned ? 'fill' : 'regular'} aria-hidden="true" />
                 </button>
+                <div className="label-picker-wrap" ref={labelPickerRef}>
+                  <button
+                    className={`icon-button ${activeNote.labels.length ? 'has-content' : ''}`}
+                    type="button"
+                    onClick={() => setLabelsOpen((open) => !open)}
+                    aria-label="Add or manage labels"
+                    title="Labels"
+                    aria-haspopup="dialog"
+                    aria-controls="label-picker"
+                    aria-expanded={labelsOpen}
+                  ><Tag aria-hidden="true" /></button>
+                  {labelsOpen && (
+                    <form className="label-popover popover" id="label-picker" role="dialog" aria-label="Add a label" onSubmit={addLabel}>
+                      <label htmlFor="label-name">Add a label</label>
+                      <input id="label-name" value={labelDraft} onChange={(event) => setLabelDraft(event.target.value)} maxLength={48} placeholder="e.g. Planning" autoFocus />
+                      {labels
+                        .filter((label) => !activeNote.labels.includes(label.name))
+                        .filter((label) => !labelDraft.trim() || label.name.toLowerCase().includes(labelDraft.trim().toLowerCase()))
+                        .slice(0, 10)
+                        .map((label) => (
+                        <button key={label.name} type="button" onClick={() => {
+                          queueNotePatch(activeNote.id, { labels: [...activeNote.labels, label.name].slice(0, 12) });
+                          setLabelsOpen(false);
+                        }}><span className={`label-dot tone-${labelColor(label.name)}`} />{label.name}</button>
+                        ))}
+                      <button className="label-create" type="submit" disabled={!labelDraft.trim()}><Plus aria-hidden="true" />Create label</button>
+                    </form>
+                  )}
+                </div>
                 <div className="note-details-wrap" ref={noteDetailsRef}>
                   <button
                     className="icon-button"
@@ -1877,34 +2137,16 @@ export function App() {
               </div>
             )}
 
-            <div className="editor-label-row">
-              {activeNote.labels.map((label) => (
-                <span key={label} className={`editor-label tone-${labelColor(label)}`}>
-                  <span>{label}</span>
-                  <button type="button" onClick={() => removeLabel(label)} aria-label={`Remove ${label} label`}><X aria-hidden="true" /></button>
-                </span>
-              ))}
-              <div className="label-picker-wrap" ref={labelPickerRef}>
-                <button className="add-label-button" type="button" onClick={() => setLabelsOpen((open) => !open)} aria-haspopup="dialog" aria-controls="label-picker" aria-expanded={labelsOpen}><Tag aria-hidden="true" />{activeNote.labels.length ? 'Add label' : 'Label'}</button>
-                {labelsOpen && (
-                  <form className="label-popover popover" id="label-picker" role="dialog" aria-label="Add a label" onSubmit={addLabel}>
-                    <label htmlFor="label-name">Add a label</label>
-                    <input id="label-name" value={labelDraft} onChange={(event) => setLabelDraft(event.target.value)} maxLength={48} placeholder="e.g. Planning" autoFocus />
-                    {labels
-                      .filter((label) => !activeNote.labels.includes(label.name))
-                      .filter((label) => !labelDraft.trim() || label.name.toLowerCase().includes(labelDraft.trim().toLowerCase()))
-                      .slice(0, 10)
-                      .map((label) => (
-                      <button key={label.name} type="button" onClick={() => {
-                        queueNotePatch(activeNote.id, { labels: [...activeNote.labels, label.name].slice(0, 12) });
-                        setLabelsOpen(false);
-                      }}><span className={`label-dot tone-${labelColor(label.name)}`} />{label.name}</button>
-                      ))}
-                    <button className="label-create" type="submit" disabled={!labelDraft.trim()}><Plus aria-hidden="true" />Create label</button>
-                  </form>
-                )}
+            {activeNote.labels.length > 0 && (
+              <div className="editor-label-row" aria-label="Note labels">
+                {activeNote.labels.map((label) => (
+                  <span key={label} className={`editor-label tone-${labelColor(label)}`}>
+                    <span>{label}</span>
+                    <button type="button" onClick={() => removeLabel(label)} aria-label={`Remove ${label} label`}><X aria-hidden="true" /></button>
+                  </span>
+                ))}
               </div>
-            </div>
+            )}
 
             <div className="editor-scroll">
               <ErrorBoundary
@@ -1914,7 +2156,7 @@ export function App() {
                     <span className="empty-editor-icon"><WarningCircle aria-hidden="true" /></span>
                     <p className="eyebrow">Editor hiccup</p>
                     <h2>This note hit a snag.</h2>
-                    <p>Your writing is safe and still synced. Reload the editor to keep going.</p>
+                    <p>Your cloud copy is unchanged. Reload the editor, then check the save status before leaving.</p>
                     <div>
                       <button className="primary-button" type="button" onClick={reset}>
                         <ArrowCounterClockwise aria-hidden="true" />Reload editor
@@ -1938,12 +2180,18 @@ export function App() {
                         value={localTitle}
                         onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
                           const value = event.target.value.replace(/\r?\n/g, ' ').slice(0, 240);
+                          autoTitleNoteIdRef.current = undefined;
                           setLocalTitle(value);
-                          queueNotePatch(activeNote.id, { title: value || 'Untitled note' });
+                          queueNotePatch(activeNote.id, { title: value });
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter') return;
+                          event.preventDefault();
+                          focusWritingSurface();
                         }}
                         onBlur={() => void flushNote(activeNote.id)}
                         aria-label="Note title"
-                        placeholder="Untitled note"
+                        placeholder="Note title"
                       />
                     )}
                     footerSlot={(
@@ -1980,11 +2228,10 @@ export function App() {
         )}
       </section>
 
-      <nav className="mobile-bottom-nav" aria-label="Mobile navigation" aria-hidden={isMobileLayout && mobileNavOpen ? 'true' : undefined} inert={isMobileLayout && mobileNavOpen}>
-        <button className={mobilePane === 'notes' ? 'is-active' : ''} type="button" onClick={() => setMobilePane('notes')}><Notepad aria-hidden="true" /><span>Notes</span></button>
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation" aria-hidden={mobileChromeHidden ? 'true' : undefined} inert={mobileChromeHidden}>
+        <button className={mobilePane === 'notes' ? 'is-active' : ''} aria-current={mobilePane === 'notes' ? 'page' : undefined} type="button" onClick={() => setMobilePane('notes')}><Notepad aria-hidden="true" /><span>Notes</span></button>
         <button type="button" onClick={() => setMobileNavOpen(true)}><Folder aria-hidden="true" /><span>Folders</span></button>
-        <button className="mobile-capture" type="button" onClick={() => setQuickCaptureOpen(true)}><Plus aria-hidden="true" /><span>Capture</span></button>
-        <button type="button" onClick={cycleTheme}><ThemeIcon theme={settings.theme} /><span>Theme</span></button>
+        <button className="mobile-capture" type="button" onClick={() => void createNewNote()}><Plus aria-hidden="true" /><span>New note</span></button>
       </nav>
 
       {mobileNavOpen && <button className="mobile-nav-scrim" type="button" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" />}
@@ -2022,50 +2269,55 @@ export function App() {
             <header><span className="modal-icon"><Folder aria-hidden="true" /></span><div><p className="eyebrow">Organization</p><h2>New folder</h2></div><button className="modal-close" type="button" onClick={() => setNewFolderOpen(false)} aria-label="Close"><X /></button></header>
             <label htmlFor="folder-name">Folder name</label>
             <input id="folder-name" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} maxLength={80} placeholder="e.g. Travel" autoFocus />
-            <div className="folder-color-preview" aria-label="Folder color preview">
-              {FOLDER_COLORS.map((color) => <span key={color} className={`tone-${color}`} />)}
-            </div>
+            <fieldset className="folder-color-preview">
+              <legend>Folder color</legend>
+              {FOLDER_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={`folder-color-choice tone-${color} ${newFolderColor === color ? 'is-active' : ''}`}
+                  aria-label={`${color} folder color`}
+                  aria-pressed={newFolderColor === color}
+                  onClick={() => setNewFolderColor(color)}
+                >{newFolderColor === color && <Check aria-hidden="true" />}</button>
+              ))}
+            </fieldset>
             <footer><button className="secondary-button" type="button" onClick={() => setNewFolderOpen(false)}>Cancel</button><button className="primary-button" type="submit" disabled={!newFolderName.trim()}>Create folder</button></footer>
           </form>
         </ModalShell>
       )}
 
-      {deleteCandidate && (
-        <ModalShell label="Permanently delete note" onClose={closePermanentDelete}>
-          <form
-            className="permanent-delete-modal"
-            aria-describedby="permanent-delete-description"
-            onSubmit={confirmPermanentDelete}
-          >
+      {conflictReviewOpen && saveConflict && (
+        <ModalShell label="Resolve note conflict" onClose={() => setConflictReviewOpen(false)}>
+          <section className="conflict-modal" aria-describedby="conflict-description">
             <header>
-              <span className="modal-icon is-danger"><Trash aria-hidden="true" /></span>
-              <div><p className="eyebrow">Trash</p><h2>Delete forever?</h2></div>
+              <span className="modal-icon is-warning"><WarningCircle aria-hidden="true" /></span>
+              <div><p className="eyebrow">Sync conflict</p><h2>Two versions need your choice.</h2></div>
               <button
                 className="modal-close"
                 type="button"
-                onClick={closePermanentDelete}
+                onClick={() => setConflictReviewOpen(false)}
                 aria-label="Close"
-                disabled={Boolean(permanentlyDeletingNoteId)}
               ><X aria-hidden="true" /></button>
             </header>
-            <p id="permanent-delete-description">
-              <strong>“{deleteCandidate.title || 'Untitled note'}”</strong> will be permanently
-              removed from Firebase. This cannot be undone.
+            <p id="conflict-description">
+              <strong>“{conflictNote?.title || 'Untitled note'}”</strong> changed on another device
+              while this tab still had edits. Nothing is replaced until you choose below.
             </p>
-            {permanentDeleteError && <p className="permanent-delete-error" role="alert">{permanentDeleteError}</p>}
-            <footer>
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={closePermanentDelete}
-                disabled={Boolean(permanentlyDeletingNoteId)}
-                autoFocus
-              >Cancel</button>
-              <button className="danger-button" type="submit" disabled={Boolean(permanentlyDeletingNoteId)}>
-                {permanentlyDeletingNoteId ? 'Deleting…' : 'Delete permanently'}
+            <div className="conflict-choice-list">
+              <button className="conflict-choice is-recommended" type="button" onClick={() => void keepLocalConflict()}>
+                <strong>Keep my edits</strong>
+                <span>Save the version currently open in this tab over the newer cloud revision.</span>
               </button>
+              <button className="conflict-choice" type="button" onClick={reloadCloudConflict}>
+                <strong>Use the cloud version</strong>
+                <span>Replace this tab's unsaved changes with the version from the other device.</span>
+              </button>
+            </div>
+            <footer>
+              <button className="secondary-button" type="button" onClick={() => setConflictReviewOpen(false)} autoFocus>Decide later</button>
             </footer>
-          </form>
+          </section>
         </ModalShell>
       )}
 

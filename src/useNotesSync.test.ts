@@ -13,6 +13,8 @@ interface PathRef { __path: string }
 const harness = vi.hoisted(() => ({
   authListeners: [] as Array<(user: unknown) => void>,
   snapshots: new Map<string, (snapshot: unknown) => void>(),
+  snapshotErrors: new Map<string, (error: unknown) => void>(),
+  signOut: vi.fn(async () => undefined),
   updateDoc: vi.fn(async () => undefined),
   setDoc: vi.fn(async () => undefined),
   runTransaction: vi.fn(async () => undefined),
@@ -32,7 +34,7 @@ vi.mock('firebase/auth', () => ({
     return () => undefined;
   },
   signInWithPopup: vi.fn(async () => ({ user: null })),
-  signOut: vi.fn(async () => undefined),
+  signOut: harness.signOut,
 }));
 
 vi.mock('firebase/firestore', () => ({
@@ -44,9 +46,14 @@ vi.mock('firebase/firestore', () => ({
     reference: PathRef,
     _options: unknown,
     next: (snapshot: unknown) => void,
+    error: (streamError: unknown) => void,
   ) => {
     harness.snapshots.set(reference.__path, next);
-    return () => harness.snapshots.delete(reference.__path);
+    harness.snapshotErrors.set(reference.__path, error);
+    return () => {
+      harness.snapshots.delete(reference.__path);
+      harness.snapshotErrors.delete(reference.__path);
+    };
   },
   runTransaction: harness.runTransaction,
   serverTimestamp: () => ISO,
@@ -83,10 +90,39 @@ function settingsSnapshot() {
   };
 }
 
+function tokenResult(
+  signInProvider: string | null = 'google.com',
+  claims: Record<string, unknown> = { email: 'owner@example.test', email_verified: true },
+) {
+  return { signInProvider, claims };
+}
+
+function authUser(
+  uid = UID,
+  token: Promise<unknown> = Promise.resolve(tokenResult()),
+) {
+  return {
+    uid,
+    emailVerified: true,
+    providerData: [{ providerId: 'google.com' }],
+    getIdTokenResult: vi.fn(() => token),
+  };
+}
+
+function emitAuth(user: unknown) {
+  act(() => harness.authListeners.forEach((listener) => listener(user)));
+}
+
 function emit(path: string, snapshot: unknown) {
   const listener = harness.snapshots.get(path);
   if (!listener) throw new Error(`No listener registered for ${path}`);
   act(() => listener(snapshot));
+}
+
+function emitError(path: string, error: unknown) {
+  const listener = harness.snapshotErrors.get(path);
+  if (!listener) throw new Error(`No error listener registered for ${path}`);
+  act(() => listener(error));
 }
 
 /** Deliver one routine metadata event on the notes stream, as Firestore does
@@ -99,13 +135,7 @@ async function renderSignedInSync() {
   const view = renderHook(() => useNotesSync());
   await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
 
-  act(() => {
-    harness.authListeners.forEach((listener) => listener({
-      uid: UID,
-      emailVerified: true,
-      providerData: [{ providerId: 'google.com' }],
-    }));
-  });
+  emitAuth(authUser());
 
   await waitFor(() => expect(harness.snapshots.size).toBe(3));
   emit(NOTES_PATH, collectionSnapshot([]));
@@ -119,6 +149,8 @@ async function renderSignedInSync() {
 beforeEach(() => {
   harness.authListeners.length = 0;
   harness.snapshots.clear();
+  harness.snapshotErrors.clear();
+  harness.signOut.mockClear();
   harness.updateDoc.mockClear();
   harness.setDoc.mockClear();
   harness.runTransaction.mockClear();
@@ -126,6 +158,92 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+describe('current token authorization', () => {
+  it('does not expose the user or attach private listeners before token validation finishes', async () => {
+    let resolveToken: (result: unknown) => void = () => undefined;
+    const pendingToken = new Promise<unknown>((resolve) => { resolveToken = resolve; });
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+
+    emitAuth(authUser(UID, pendingToken));
+
+    expect(view.result.current.authStatus).toBe('loading');
+    expect(view.result.current.user).toBeNull();
+    expect(harness.snapshots.size).toBe(0);
+
+    await act(async () => resolveToken(tokenResult()));
+    await waitFor(() => expect(harness.snapshots.size).toBe(3));
+    expect(view.result.current.authStatus).toBe('signed-in');
+    expect(view.result.current.user?.uid).toBe(UID);
+  });
+
+  it('uses the exact current-token provider instead of linked providerData', async () => {
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+
+    emitAuth(authUser(UID, Promise.resolve(tokenResult('password'))));
+
+    await waitFor(() => expect(view.result.current.authStatus).toBe('signed-out'));
+    expect(view.result.current.user).toBeNull();
+    expect(view.result.current.error).toBe('Use a verified Google account to sync Notes.');
+    expect(harness.snapshots.size).toBe(0);
+    expect(harness.signOut).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a string email claim', { email_verified: true }],
+    ['a verified email claim', { email: 'owner@example.test', email_verified: false }],
+  ])('rejects a Google token without %s', async (_label, claims) => {
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+
+    emitAuth(authUser(UID, Promise.resolve(tokenResult('google.com', claims))));
+
+    await waitFor(() => expect(view.result.current.authStatus).toBe('signed-out'));
+    expect(view.result.current.user).toBeNull();
+    expect(harness.snapshots.size).toBe(0);
+    expect(harness.signOut).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when the current token cannot be inspected', async () => {
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+
+    emitAuth(authUser(UID, Promise.reject(new Error('token inspection failed'))));
+
+    await waitFor(() => expect(view.result.current.authStatus).toBe('signed-out'));
+    expect(view.result.current.user).toBeNull();
+    expect(view.result.current.error).toBe(
+      'Notes could not verify this Google session. Sign in again to continue.',
+    );
+    expect(harness.snapshots.size).toBe(0);
+    expect(harness.signOut).toHaveBeenCalledOnce();
+  });
+
+  it('ignores stale token validation after a newer auth revision wins', async () => {
+    let resolveFirstToken: (result: unknown) => void = () => undefined;
+    const firstToken = new Promise<unknown>((resolve) => { resolveFirstToken = resolve; });
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+
+    emitAuth(authUser('first-uid', firstToken));
+    emitAuth(authUser('second-uid'));
+
+    await waitFor(() => expect(view.result.current.user?.uid).toBe('second-uid'));
+    expect(Array.from(harness.snapshots.keys())).toEqual(expect.arrayContaining([
+      'notes_users/second-uid/notes',
+      'notes_users/second-uid/folders',
+      'notes_users/second-uid/settings/current',
+    ]));
+
+    await act(async () => resolveFirstToken(tokenResult()));
+
+    expect(view.result.current.user?.uid).toBe('second-uid');
+    expect(Array.from(harness.snapshots.keys()).some((path) => path.includes('first-uid'))).toBe(false);
+    expect(harness.signOut).not.toHaveBeenCalled();
+  });
 });
 
 describe('write failures', () => {
@@ -148,6 +266,29 @@ describe('write failures', () => {
     // Notes keeps no local copy of it.
     emitRoutineNotesSnapshot();
     emitRoutineNotesSnapshot();
+
+    expect(result.current.syncStatus).toBe('error');
+    expect(result.current.error).toBe('This account cannot access the private Notes collection.');
+    expect(result.current.lastSyncedAt).toBe(syncedAt);
+  });
+
+  it('preserves a rejected write across automatic listener recovery', async () => {
+    const { result } = await renderSignedInSync();
+    const syncedAt = result.current.lastSyncedAt;
+
+    harness.updateDoc.mockRejectedValueOnce(
+      Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }),
+    );
+    await act(async () => {
+      await expect(result.current.updateSettings({ theme: 'dark' })).rejects.toBeTruthy();
+    });
+
+    emitError(NOTES_PATH, Object.assign(new Error('stream unavailable'), { code: 'unavailable' }));
+    act(() => window.dispatchEvent(new Event('online')));
+
+    emit(NOTES_PATH, collectionSnapshot([]));
+    emit(FOLDERS_PATH, collectionSnapshot([folderDoc]));
+    emit(SETTINGS_PATH, settingsSnapshot());
 
     expect(result.current.syncStatus).toBe('error');
     expect(result.current.error).toBe('This account cannot access the private Notes collection.');
