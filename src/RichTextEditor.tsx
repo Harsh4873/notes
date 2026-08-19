@@ -110,7 +110,7 @@ const EDITOR_EXTENSIONS = [
     alignments: ['left', 'center', 'right'],
   }),
   Placeholder.configure({
-    placeholder: 'Start writing… Type # for a heading or - [ ] for a task.',
+    placeholder: 'Start writing…',
   }),
 ];
 
@@ -450,7 +450,7 @@ export function RichTextEditor({
       data-toolbar-revision={toolbarRevision}
       aria-label="Note editor"
     >
-      <div className="rich-text-editor__chrome">
+      <div className={`rich-text-editor__chrome ${format === 'plain' ? 'is-plain' : ''}`}>
         <div
           className="rich-text-editor__toolbar"
           role="toolbar"
@@ -925,6 +925,7 @@ export function RichTextEditor({
         ) : null}
       </div>
 
+      <div className="rich-text-editor__document">
       {titleSlot ? <div className="rich-text-editor__title-slot">{titleSlot}</div> : null}
 
       {format === 'rich' ? (
@@ -938,7 +939,7 @@ export function RichTextEditor({
           <textarea
             aria-label="Plain text note"
             value={plainValue}
-            placeholder="Write plain text… Markdown-style text stays plain here."
+            placeholder="Start writing…"
             spellCheck
             autoCapitalize="sentences"
             onBlur={() => onBlurRef.current?.()}
@@ -955,6 +956,7 @@ export function RichTextEditor({
         </div>
       )}
       {footerSlot ? <div className="rich-text-editor__footer-slot">{footerSlot}</div> : null}
+      </div>
     </section>
   );
 }

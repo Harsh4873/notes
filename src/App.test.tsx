@@ -88,6 +88,7 @@ function dispatchPointer(
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: vi.fn((query: string) => ({
@@ -105,6 +106,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.clearAllMocks();
 });
 
@@ -168,13 +170,13 @@ describe('Editor', () => {
     expect(screen.getByLabelText('Note title')).toBeInTheDocument();
   });
 
-  it('creates inside the current label, focuses the blank title, and moves Enter into the body', async () => {
+  it('creates inside the current label as plain text and focuses the writing surface', async () => {
     const planningNote = makeNote({ labels: ['Planning'] });
     const api = useMockSync([planningNote]);
     const { container, rerender } = render(<App />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Planning 1' }));
-    fireEvent.click(container.querySelector('.topbar-capture-button') as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a new note' }));
 
     await waitFor(() => {
       expect(api.createNote).toHaveBeenCalledWith(expect.objectContaining({
@@ -182,7 +184,7 @@ describe('Editor', () => {
         folderId: 'inbox',
         labels: ['Planning'],
         pinned: false,
-        format: 'rich',
+        format: 'plain',
       }));
     });
 
@@ -191,19 +193,17 @@ describe('Editor', () => {
       title: '',
       content: '',
       contentText: '',
+      format: 'plain',
       labels: ['Planning'],
     })];
     rerender(<App />);
 
-    const title = await screen.findByLabelText('Note title');
-    await waitFor(() => expect(title).toHaveFocus());
     const writingSurface = await waitFor(() => {
-      const surface = container.querySelector<HTMLElement>('.rich-text-editor__prose');
+      const surface = container.querySelector<HTMLElement>('.rich-text-editor__surface--plain textarea');
       expect(surface).not.toBeNull();
       return surface!;
     });
-    fireEvent.keyDown(title, { key: 'Enter' });
-    expect(writingSurface).toHaveFocus();
+    await waitFor(() => expect(writingSurface).toHaveFocus());
   });
 });
 
@@ -259,5 +259,18 @@ describe('Workspace usability', () => {
     await waitFor(() => {
       expect(api.createFolder).toHaveBeenCalledWith('Ideas', 'moss');
     });
+  });
+
+  it('hides the note list the same way as the folder sidebar', async () => {
+    useMockSync([makeNote()]);
+    const { container } = render(<App />);
+
+    const shell = container.querySelector('.app-shell');
+    expect(shell).not.toHaveClass('list-collapsed');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide note list' }));
+    expect(shell).toHaveClass('list-collapsed');
+    expect(screen.getByRole('button', { name: 'Show note list' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show note list' }));
+    expect(shell).not.toHaveClass('list-collapsed');
   });
 });

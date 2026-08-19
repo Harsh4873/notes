@@ -11,6 +11,7 @@ import { Folder } from '@phosphor-icons/react/Folder';
 import { FunnelSimple } from '@phosphor-icons/react/FunnelSimple';
 import { GoogleLogo } from '@phosphor-icons/react/GoogleLogo';
 import { Lightning } from '@phosphor-icons/react/Lightning';
+import { List } from '@phosphor-icons/react/List';
 import { ListBullets } from '@phosphor-icons/react/ListBullets';
 import { MagnifyingGlass } from '@phosphor-icons/react/MagnifyingGlass';
 import { Monitor } from '@phosphor-icons/react/Monitor';
@@ -41,7 +42,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { plainTextToRichContent, richContentToPlainText } from './editorContent';
+import { richContentToPlainText } from './editorContent';
 import { ErrorBoundary } from './ErrorBoundary';
 import type { EditorChange } from './RichTextEditor';
 import type { FolderRecord, NoteRecord, NotesSettings, ThemePreference } from './types';
@@ -81,6 +82,34 @@ const DEFAULT_SETTINGS: NotesSettings = {
 };
 
 const FOLDER_COLORS = ['clay', 'moss', 'gold', 'blue', 'plum', 'stone'];
+const WORKSPACE_LAYOUT_KEY = 'notes.workspace.layout';
+
+interface WorkspaceLayout {
+  listCollapsed: boolean;
+  sidebarCollapsed: boolean;
+}
+
+function readWorkspaceLayout(): WorkspaceLayout {
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_LAYOUT_KEY);
+    if (!raw) return { listCollapsed: false, sidebarCollapsed: false };
+    const parsed = JSON.parse(raw) as Partial<WorkspaceLayout>;
+    return {
+      listCollapsed: parsed.listCollapsed === true,
+      sidebarCollapsed: parsed.sidebarCollapsed === true,
+    };
+  } catch {
+    return { listCollapsed: false, sidebarCollapsed: false };
+  }
+}
+
+function writeWorkspaceLayout(layout: WorkspaceLayout) {
+  try {
+    window.localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    // Private mode or a full quota should not block writing.
+  }
+}
 
 function displayDate(value: string) {
   const timestamp = Date.parse(value);
@@ -693,7 +722,8 @@ export function App() {
   const [noteDetailsOpen, setNoteDetailsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>('notes');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readWorkspaceLayout().sidebarCollapsed);
+  const [listCollapsed, setListCollapsed] = useState(() => readWorkspaceLayout().listCollapsed);
   const [localTitle, setLocalTitle] = useState('');
   const [toast, setToast] = useState<ToastState>();
   const [conflictReviewOpen, setConflictReviewOpen] = useState(false);
@@ -771,7 +801,6 @@ export function App() {
     setFormatFilter('all');
     setMobileNavOpen(false);
     setMobilePane('notes');
-    setSidebarCollapsed(false);
     setLocalTitle('');
     if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
     newNoteFocusTimerRef.current = undefined;
@@ -873,16 +902,22 @@ export function App() {
     if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
     newNoteFocusTimerRef.current = undefined;
     newNoteFocusIdRef.current = undefined;
-    if (!focusCreatedTitleRef.current) return;
+    const shouldFocusTitle = focusCreatedTitleRef.current;
     focusCreatedTitleRef.current = false;
     let cancelled = false;
     let attempts = 0;
     let timer: number | undefined;
     const focusWhenReady = () => {
       if (cancelled) return;
-      if (titleRef.current) {
+      if (shouldFocusTitle && titleRef.current) {
         titleRef.current.focus();
         titleRef.current.select();
+        return;
+      }
+      const surface = editorPanelRef.current
+        ?.querySelector<HTMLElement>('.rich-text-editor__prose, .rich-text-editor__surface--plain textarea');
+      if (!shouldFocusTitle && surface) {
+        surface.focus();
         return;
       }
       attempts += 1;
@@ -1180,8 +1215,12 @@ export function App() {
     const title = titleRef.current;
     if (!title) return;
     title.style.height = 'auto';
-    title.style.height = `${Math.min(title.scrollHeight, 172)}px`;
+    title.style.height = `${Math.min(title.scrollHeight, 88)}px`;
   }, [activeNote?.id, localTitle]);
+
+  useEffect(() => {
+    writeWorkspaceLayout({ listCollapsed, sidebarCollapsed });
+  }, [listCollapsed, sidebarCollapsed]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
@@ -1201,7 +1240,8 @@ export function App() {
       const command = event.metaKey || event.ctrlKey;
       if (command && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        searchRef.current?.focus();
+        if (!isMobileLayout) setListCollapsed(false);
+        window.setTimeout(() => searchRef.current?.focus(), 0);
       }
       if (command && event.shiftKey && event.key.toLowerCase() === 'c') {
         event.preventDefault();
@@ -1376,7 +1416,7 @@ export function App() {
     try {
       const folderId = view.startsWith('folder:') ? view.slice(7) : 'inbox';
       const inheritedLabels = view.startsWith('label:') ? [view.slice(6)] : [];
-      const format = formatFilter === 'plain' ? 'plain' : 'rich';
+      const format = formatFilter === 'rich' ? 'rich' : 'plain';
       // Trash can never list a live note, so a new note leaves that view with it.
       if (view === 'trash') setView('inbox');
       if (search) setSearch('');
@@ -1391,7 +1431,7 @@ export function App() {
         pinned: view === 'pinned',
       });
       if (workspaceGenerationRef.current !== generation) return;
-      waitForCreatedNote(id, true);
+      waitForCreatedNote(id, false);
       autoTitleNoteIdRef.current = id;
       setActiveNoteId(id);
       setMobilePane('editor');
@@ -1415,12 +1455,11 @@ export function App() {
     const generation = workspaceGenerationRef.current;
     setCreating(true);
     try {
-      const rich = plainTextToRichContent(text, settings.smartFormatting);
       const id = await sync.createNote({
         title: noteTitleFromText(text),
-        content: rich.content,
-        contentText: rich.contentText,
-        format: 'rich',
+        content: text,
+        contentText: text,
+        format: 'plain',
         folderId: 'inbox',
         labels: [],
         pinned: false,
@@ -1716,10 +1755,11 @@ export function App() {
   const mobileChromeHidden = isMobileLayout && (mobileNavOpen || mobilePane === 'editor');
 
   return (
-    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
+    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${listCollapsed ? 'list-collapsed' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
       <aside
         ref={sidebarRef}
         className="sidebar"
+        id="notes-sidebar"
         aria-label="Notes navigation"
         aria-hidden={(isMobileLayout && !mobileNavOpen) || (!isMobileLayout && sidebarCollapsed) ? 'true' : undefined}
         inert={(isMobileLayout && !mobileNavOpen) || (!isMobileLayout && sidebarCollapsed)}
@@ -1797,10 +1837,23 @@ export function App() {
             if (isMobileLayout) setMobileNavOpen(true);
             else setSidebarCollapsed((collapsed) => !collapsed);
           }}
-          aria-label={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show navigation' : 'Hide navigation'}
-          title={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          aria-label={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show folders' : 'Hide folders'}
+          title={isMobileLayout ? 'Open navigation' : sidebarCollapsed ? 'Show folders' : 'Hide folders'}
+          aria-expanded={!isMobileLayout && !sidebarCollapsed}
+          aria-controls="notes-sidebar"
         >
           <SidebarSimple aria-hidden="true" />
+        </button>
+        <button
+          className={`icon-button list-toggle-button ${listCollapsed ? '' : 'is-active'}`}
+          type="button"
+          onClick={() => setListCollapsed((collapsed) => !collapsed)}
+          aria-label={listCollapsed ? 'Show note list' : 'Hide note list'}
+          title={listCollapsed ? 'Show note list' : 'Hide note list'}
+          aria-expanded={!listCollapsed}
+          aria-controls="note-list-panel"
+        >
+          <List aria-hidden="true" />
         </button>
         <label className="search-field">
           <MagnifyingGlass aria-hidden="true" />
@@ -1858,6 +1911,7 @@ export function App() {
             title={`Theme: ${settings.theme}`}
           >
             <ThemeIcon theme={settings.theme} />
+            <span className="theme-button-label">{settings.theme[0].toUpperCase()}{settings.theme.slice(1)}</span>
           </button>
           {themeMenuOpen && (
             <div className="theme-menu popover" id="theme-menu" role="dialog" aria-label="Choose theme">
@@ -1905,9 +1959,10 @@ export function App() {
 
       <section
         className="note-list-panel"
+        id="note-list-panel"
         aria-label={`${search ? 'Search results' : viewTitle(view, folders)} notes`}
-        aria-hidden={isMobileLayout && (mobileNavOpen || mobilePane === 'editor') ? 'true' : undefined}
-        inert={isMobileLayout && (mobileNavOpen || mobilePane === 'editor')}
+        aria-hidden={(isMobileLayout && (mobileNavOpen || mobilePane === 'editor')) || (!isMobileLayout && listCollapsed) ? 'true' : undefined}
+        inert={(isMobileLayout && (mobileNavOpen || mobilePane === 'editor')) || (!isMobileLayout && listCollapsed)}
       >
         <header className="note-list-header">
           <div>
@@ -2191,7 +2246,7 @@ export function App() {
                         }}
                         onBlur={() => void flushNote(activeNote.id)}
                         aria-label="Note title"
-                        placeholder="Note title"
+                        placeholder="Title"
                       />
                     )}
                     footerSlot={(
@@ -2217,9 +2272,9 @@ export function App() {
         ) : (
           <div className="empty-editor">
             <span className="empty-editor-icon"><NotePencil aria-hidden="true" /></span>
-            <p className="eyebrow">Your writing space</p>
+            <p className="eyebrow">Writing page</p>
             <h2>Choose a note,<br />or begin a new one.</h2>
-            <p>Rich text is ready when you want structure. Plain text is always one switch away.</p>
+            <p>Plain text is the default. Hide the notes list when you want a quiet page, then switch to rich text if a note needs structure.</p>
             <div>
               <button className="primary-button" type="button" onClick={() => void createNewNote()}><NotePencil aria-hidden="true" />New note</button>
               <button className="secondary-button" type="button" onClick={() => setQuickCaptureOpen(true)}><Lightning aria-hidden="true" />Quick capture</button>
@@ -2244,15 +2299,15 @@ export function App() {
               <div><p className="eyebrow">Quick capture</p><h2>Drop it here.</h2></div>
               <button className="modal-close" type="button" onClick={() => setQuickCaptureOpen(false)} aria-label="Close"><X aria-hidden="true" /></button>
             </header>
-            <p>Capture it now and shape it later. Smart formatting carries the structure to every signed-in device.</p>
-            <div className="quick-capture-hints" aria-label="Supported smart formatting">
-              <span># Heading</span><span>- [ ] Task</span><span>| Table |</span><span>``` Code</span>
+            <p>Drop a thought now and shape it later. New captures stay in plain text until you switch a note to rich text.</p>
+            <div className="quick-capture-hints" aria-label="Capture tips">
+              <span>Plain text</span><span>First line becomes the title</span><span>Switch to rich later</span>
             </div>
             <textarea
               ref={quickRef}
               value={quickText}
               onChange={(event) => setQuickText(event.target.value)}
-              placeholder={'Paste or type anything…\n\nUse # headings, - lists, - [ ] checklists, > quotes, | tables |, or ``` code and smart formatting will take care of the rest.'}
+              placeholder={'Paste or type anything…'}
               rows={10}
             />
             <footer>

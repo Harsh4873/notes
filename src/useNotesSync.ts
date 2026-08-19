@@ -569,7 +569,7 @@ export function useNotesSync(): NotesSyncApi {
     const uid = activeUidRef.current;
     if (!uid) throw new Error('Sign in before creating a note.');
 
-    const format = input.format ?? 'rich';
+    const format = input.format ?? 'plain';
     if (format !== 'rich' && format !== 'plain') throw new Error('Choose rich or plain text format.');
     if (input.title !== undefined) assertText(input.title, 'Note title');
     if (input.content !== undefined) assertText(input.content, 'Note content');
