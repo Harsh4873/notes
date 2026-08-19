@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // can be exercised without any sibling repository on disk.
 
 const SCRIPT = resolve(process.cwd(), 'scripts/check-shared-rules.mjs');
-const SIBLINGS = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'studies', 'radar'];
+const SIBLINGS = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'studies', 'radar', 'goals'];
 const RULES = 'rules_version = "2";\nservice cloud.firestore {\n}\n';
 
 const workspaces: string[] = [];
@@ -96,8 +96,8 @@ describe('shared Firestore rules parity check', () => {
     const { status, stdout, stderr } = runCheck({ siblings: ['gym', 'daymark'] });
 
     expect(status).toBe(1);
-    expect(stderr).toContain('only 2 of 8 sibling repositories are checked out');
-    expect(stderr).toContain('fare, slate, research, degree, studies, radar');
+    expect(stderr).toContain('only 2 of 9 sibling repositories are checked out');
+    expect(stderr).toContain('fare, slate, research, degree, studies, radar, goals');
     expect(stdout).toBe('');
   });
 
@@ -127,7 +127,7 @@ describe('shared Firestore rules parity check', () => {
     const { status, stdout } = runCheck({ siblings: SIBLINGS });
 
     expect(status).toBe(0);
-    expect(stdout).toContain('byte-identical copies in all 8 sibling repositories');
+    expect(stdout).toContain('byte-identical copies in all 9 sibling repositories');
   });
 
   it('fails when the recorded digest is missing or malformed', () => {
