@@ -3212,9 +3212,7 @@ select {
 
 button:focus-visible,
 input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-[contenteditable='true']:focus-visible {
+select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -5088,4 +5086,14 @@ select:focus-visible,
     border-bottom: 0;
     padding-top: 2px;
   }
+}
+
+.note-title-input:focus,
+.note-title-input:focus-visible,
+.rich-text-editor__prose:focus,
+.rich-text-editor__prose:focus-visible,
+.rich-text-editor__surface--plain textarea:focus,
+.rich-text-editor__surface--plain textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
