@@ -71,6 +71,35 @@ function validSettings() {
   };
 }
 
+function validRecipesVault() {
+  const updatedAt = '2026-08-22T12:00:00.000Z';
+  const updatedAtMs = Date.parse(updatedAt);
+  const clientId = 'recipes-rules-test';
+  return {
+    schemaVersion: 1,
+    state: {
+      version: 1,
+      settings: {
+        theme: 'system',
+        calorieTarget: 550,
+        proteinTargetG: 30,
+        maxCookMinutes: 35,
+        eggsAllowed: true,
+        updatedAt,
+      },
+      pantry: [],
+      recipes: [],
+      shopping: [],
+      updatedAt,
+      updatedAtMs,
+      clientId,
+    },
+    updatedAt,
+    updatedAtMs,
+    clientId,
+  };
+}
+
 describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
   let testEnvironment: RulesTestEnvironment;
 
@@ -364,6 +393,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     const fareFood = doc(firestore, 'fare_users', OWNER_UID, 'foods', 'food-1');
     const researchNote = doc(firestore, 'research_users', OWNER_UID, 'notes', 'note-1');
     const recallSet = doc(firestore, 'recall_users', OWNER_UID, 'sets', 'set-1');
+    const recipesVault = doc(firestore, 'recipes_vaults', OWNER_UID);
 
     await assertSucceeds(setDoc(gymCore, { schemaVersion: 1 }));
     await assertSucceeds(setDoc(gymLog, {
@@ -399,6 +429,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
       createdAt: 1,
       updatedAt: 1,
     }));
+    await assertSucceeds(setDoc(recipesVault, validRecipesVault()));
 
     await assertSucceeds(getDoc(gymCore));
     await assertSucceeds(getDoc(gymLog));
@@ -407,6 +438,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
     await assertSucceeds(getDoc(fareFood));
     await assertSucceeds(getDoc(researchNote));
     await assertSucceeds(getDoc(recallSet));
+    await assertSucceeds(getDoc(recipesVault));
   });
 
   it('denies a non-owner across every existing shared-app namespace', async () => {
@@ -455,6 +487,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Notes Firestore security rules', () => {
         createdAt: 1,
         updatedAt: 1,
       }),
+      () => setDoc(doc(firestore, 'recipes_vaults', OWNER_UID), validRecipesVault()),
     ];
 
     for (const attempt of attempts) await assertFails(attempt());

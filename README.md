@@ -34,7 +34,7 @@ This repository points the Firebase CLI at the existing `pickledgerpro` project.
 2. Add `harsh.bet` to **Authentication → Settings → Authorized domains**. Add any separate preview hostname only when it is intentionally used for sign-in.
 3. Confirm Google sign-in is enabled and the Pages domains are authorized.
 
-The Firebase web configuration is public client configuration, not an authorization boundary. UID isolation lives in `firestore.rules`. Because deploying Firestore rules replaces the project's entire ruleset, this file contains the complete Gym, Daymark, Slate, Fare, Notes, Recall, and Degree Canvas policy before the final deny-all.
+The Firebase web configuration is public client configuration, not an authorization boundary. UID isolation lives in `firestore.rules`. Because deploying Firestore rules replaces the project's entire ruleset, this file contains the complete shared private-app policy before the final deny-all.
 
 Deploy the combined rules intentionally:
 
@@ -50,7 +50,7 @@ npm run test:rules
 
 Rule tests require Java 21+ and Firebase CLI `15.14.0`. The Pages workflow installs that pinned CLI version before running the emulator suite.
 
-Before a shared Firebase rules release, run `npm run check:rules-parity` from this workspace. It verifies the reviewed rules hash even in a one-repository CI checkout and, when the sibling repositories are present, requires the Gym, Daymark, Fare, Slate, Research, Degree, Studies, and Radar copies to be byte-identical.
+Before a shared Firebase rules release, run `npm run check:rules-parity` from this workspace. It verifies the reviewed rules hash even in a one-repository CI checkout and, when the sibling repositories are present, requires the Gym, Daymark, Fare, Slate, Research, Degree, Recipes, Radar, and Goals copies to be byte-identical.
 
 ## Development and Pages
 

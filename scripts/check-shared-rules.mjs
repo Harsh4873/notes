@@ -2,8 +2,8 @@
 // firestore.rules. Two things keep the copies in step:
 //
 //   1. shared-firestore-rules.sha256 pins the reviewed digest of that shared
-//      ruleset, and every repository commits the same pin. Checking the local
-//      rules against the local pin is therefore a real parity check, and it is
+//      ruleset. Checking the Notes rules against that local pin is therefore a
+//      real parity check, and it is
 //      the only half a single-repository checkout (CI) is able to run.
 //   2. When the sibling repositories happen to sit next to this one on a
 //      developer machine, their files are also compared byte for byte.
@@ -18,7 +18,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SIBLING_NAMES = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'studies', 'radar', 'goals'];
+const SIBLING_NAMES = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'recipes', 'radar', 'goals'];
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
