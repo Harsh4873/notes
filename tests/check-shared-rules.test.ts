@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // can be exercised without any sibling repository on disk.
 
 const SCRIPT = resolve(process.cwd(), 'scripts/check-shared-rules.mjs');
-const SIBLINGS = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'recipes', 'radar', 'goals'];
+const SIBLINGS = ['gym', 'daymark', 'fare', 'slate', 'research', 'degree', 'recipes', 'radar', 'simplfy'];
 const RULES = 'rules_version = "2";\nservice cloud.firestore {\n}\n';
 
 const workspaces: string[] = [];
@@ -97,7 +97,7 @@ describe('shared Firestore rules parity check', () => {
 
     expect(status).toBe(1);
     expect(stderr).toContain('only 2 of 9 sibling repositories are checked out');
-    expect(stderr).toContain('fare, slate, research, degree, recipes, radar, goals');
+    expect(stderr).toContain('fare, slate, research, degree, recipes, radar, simplfy');
     expect(stdout).toBe('');
   });
 
