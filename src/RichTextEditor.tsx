@@ -58,7 +58,6 @@ export interface RichTextEditorProps {
   format: EditorFormat;
   content: string;
   richBackup?: string;
-  titleSlot?: ReactNode;
   footerSlot?: ReactNode;
   onChange: (next: EditorContentValue) => void;
   onFormatChange: (next: EditorContentValue) => void;
@@ -167,7 +166,6 @@ export function RichTextEditor({
   format,
   content,
   richBackup = '',
-  titleSlot,
   footerSlot,
   onChange,
   onFormatChange,
@@ -926,7 +924,6 @@ export function RichTextEditor({
       </div>
 
       <div className="rich-text-editor__document">
-      {titleSlot ? <div className="rich-text-editor__title-slot">{titleSlot}</div> : null}
 
       {format === 'rich' ? (
         <EditorContent

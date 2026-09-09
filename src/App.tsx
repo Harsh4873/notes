@@ -6,6 +6,9 @@ import { CloudArrowUp } from '@phosphor-icons/react/CloudArrowUp';
 import { CloudCheck } from '@phosphor-icons/react/CloudCheck';
 import { CloudSlash } from '@phosphor-icons/react/CloudSlash';
 import { Copy } from '@phosphor-icons/react/Copy';
+import { CornersOut } from '@phosphor-icons/react/CornersOut';
+import { CornersIn } from '@phosphor-icons/react/CornersIn';
+import { PencilSimple } from '@phosphor-icons/react/PencilSimple';
 import { DotsThree } from '@phosphor-icons/react/DotsThree';
 import { Folder } from '@phosphor-icons/react/Folder';
 import { FunnelSimple } from '@phosphor-icons/react/FunnelSimple';
@@ -30,7 +33,6 @@ import { WarningCircle } from '@phosphor-icons/react/WarningCircle';
 import { X } from '@phosphor-icons/react/X';
 import type { User } from 'firebase/auth';
 import {
-  type ChangeEvent,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -337,6 +339,7 @@ interface SwipeableNoteRowProps {
   folderName: string;
   note: NoteRecord;
   onCopy: () => void;
+  onRename: () => void;
   onNavigate: (direction: -1 | 1) => void;
   onRestore: () => Promise<void>;
   onSelect: () => void;
@@ -349,6 +352,7 @@ function SwipeableNoteRow({
   folderName,
   note,
   onCopy,
+  onRename,
   onNavigate,
   onRestore,
   onSelect,
@@ -472,7 +476,7 @@ function SwipeableNoteRow({
     }
   };
 
-  const title = note.title || 'Untitled note';
+  const title = note.title || noteTitleFromText(note.contentText);
   const busy = actionPending;
 
   return (
@@ -509,8 +513,14 @@ function SwipeableNoteRow({
             }
             onSelect();
           }}
+          onDoubleClick={() => { if (!note.deleted) onRename(); }}
           aria-current={selected ? 'true' : undefined}
           onKeyDown={(event) => {
+            if (event.key === 'F2' && !note.deleted) {
+              event.preventDefault();
+              onRename();
+              return;
+            }
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
             event.preventDefault();
             onNavigate(event.key === 'ArrowDown' ? 1 : -1);
@@ -520,10 +530,10 @@ function SwipeableNoteRow({
             <strong>{title}</strong>
             {note.pinned && <PushPin weight="fill" aria-label="Pinned" />}
           </span>
-          <time>{displayDate(note.updatedAt)}</time>
           <span className="note-preview">{cleanPreview(note.contentText)}</span>
           <span className="note-row-footer">
-            <span className="note-row-folder">{folderName}</span>
+            <time>{displayDate(note.updatedAt)}</time>
+            {folderName !== 'Inbox' && <span className="note-row-folder">{folderName}</span>}
             {note.labels.length > 0 && (
               <span className="note-row-labels" aria-label={`Labels: ${note.labels.join(', ')}`}>
                 {note.labels.slice(0, 2).map((label) => (
@@ -560,11 +570,11 @@ function SwipeableNoteRow({
               <button
                 className="note-row-action"
                 type="button"
-                title="Copy note"
-                aria-label={`Copy ${title}`}
+                title="Rename note (F2)"
+                aria-label={`Rename ${title}`}
                 disabled={busy}
-                onClick={onCopy}
-              ><Copy aria-hidden="true" /></button>
+                onClick={onRename}
+              ><PencilSimple aria-hidden="true" /></button>
               <button
                 className="note-row-action is-danger"
                 type="button"
@@ -609,7 +619,7 @@ function ModalShell({ children, label, onClose }: ModalShellProps) {
     });
 
     window.setTimeout(() => {
-      const preferred = layer?.querySelector<HTMLElement>('[autofocus]');
+      const preferred = layer?.querySelector<HTMLElement>('[autofocus], [data-autofocus]');
       const first = layer?.querySelector<HTMLElement>('button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
       (preferred ?? first)?.focus();
     }, 0);
@@ -724,7 +734,10 @@ export function App() {
   const [mobilePane, setMobilePane] = useState<MobilePane>('notes');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readWorkspaceLayout().sidebarCollapsed);
   const [listCollapsed, setListCollapsed] = useState(() => readWorkspaceLayout().listCollapsed);
-  const [localTitle, setLocalTitle] = useState('');
+  const [renameNoteId, setRenameNoteId] = useState<string>();
+  const [renameDraft, setRenameDraft] = useState('');
+  const previousLayoutRef = useRef<WorkspaceLayout | undefined>(undefined);
+  const focusMode = !isMobileLayout && sidebarCollapsed && listCollapsed;
   const [toast, setToast] = useState<ToastState>();
   const [conflictReviewOpen, setConflictReviewOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -735,7 +748,6 @@ export function App() {
   const saveConflict = Object.values(saveConflicts)[0];
   const searchRef = useRef<HTMLInputElement>(null);
   const quickRef = useRef<HTMLTextAreaElement>(null);
-  const titleRef = useRef<HTMLTextAreaElement>(null);
   const editorPanelRef = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
@@ -757,7 +769,6 @@ export function App() {
   const workspaceGenerationRef = useRef(0);
   const newNoteFocusIdRef = useRef<string | undefined>(undefined);
   const newNoteFocusTimerRef = useRef<number | undefined>(undefined);
-  const focusCreatedTitleRef = useRef(false);
   const autoTitleNoteIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -801,11 +812,11 @@ export function App() {
     setFormatFilter('all');
     setMobileNavOpen(false);
     setMobilePane('notes');
-    setLocalTitle('');
+    setRenameNoteId(undefined);
+    setRenameDraft('');
     if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
     newNoteFocusTimerRef.current = undefined;
     newNoteFocusIdRef.current = undefined;
-    focusCreatedTitleRef.current = false;
     autoTitleNoteIdRef.current = undefined;
     workspaceUidRef.current = nextUid;
   }, [sync.user?.uid]);
@@ -864,7 +875,9 @@ export function App() {
       .sort((left, right) => {
         if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
         if (noteSort === 'oldest') return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
-        if (noteSort === 'title') return left.title.localeCompare(right.title, undefined, { sensitivity: 'base', numeric: true });
+        if (noteSort === 'title') return (left.title || noteTitleFromText(left.contentText)).localeCompare(
+          right.title || noteTitleFromText(right.contentText), undefined, { sensitivity: 'base', numeric: true },
+        );
         return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
       });
   }, [folders, formatFilter, noteSort, notes, search, trashedNotes, view]);
@@ -902,21 +915,14 @@ export function App() {
     if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
     newNoteFocusTimerRef.current = undefined;
     newNoteFocusIdRef.current = undefined;
-    const shouldFocusTitle = focusCreatedTitleRef.current;
-    focusCreatedTitleRef.current = false;
     let cancelled = false;
     let attempts = 0;
     let timer: number | undefined;
     const focusWhenReady = () => {
       if (cancelled) return;
-      if (shouldFocusTitle && titleRef.current) {
-        titleRef.current.focus();
-        titleRef.current.select();
-        return;
-      }
       const surface = editorPanelRef.current
         ?.querySelector<HTMLElement>('.rich-text-editor__prose, .rich-text-editor__surface--plain textarea');
-      if (!shouldFocusTitle && surface) {
+      if (surface) {
         surface.focus();
         return;
       }
@@ -949,13 +955,11 @@ export function App() {
     if (newNoteFocusTimerRef.current) window.clearTimeout(newNoteFocusTimerRef.current);
     newNoteFocusTimerRef.current = undefined;
     newNoteFocusIdRef.current = undefined;
-    focusCreatedTitleRef.current = false;
   }, []);
 
-  const waitForCreatedNote = useCallback((noteId: string, focusTitle: boolean) => {
+  const waitForCreatedNote = useCallback((noteId: string) => {
     clearPendingCreatedNote();
     newNoteFocusIdRef.current = noteId;
-    focusCreatedTitleRef.current = focusTitle;
     const generation = workspaceGenerationRef.current;
     newNoteFocusTimerRef.current = window.setTimeout(() => {
       if (
@@ -1194,29 +1198,10 @@ export function App() {
   }, [cloudNotes, saveRevision]);
 
   useEffect(() => {
-    if (!activeNote) {
-      setLocalTitle('');
-      return;
-    }
-    setLocalTitle(activeNote.title);
-  }, [activeNote?.id]);
-
-  useEffect(() => {
-    if (
-      !activeNote
-      || pendingPatches.current.has(activeNote.id)
-      || saveTimers.current.has(activeNote.id)
-      || inFlightNotes.current.has(activeNote.id)
-    ) return;
-    setLocalTitle(activeNote.title);
-  }, [activeNote?.title, activeNote?.id, saveRevision]);
-
-  useEffect(() => {
-    const title = titleRef.current;
-    if (!title) return;
-    title.style.height = 'auto';
-    title.style.height = `${Math.min(title.scrollHeight, 88)}px`;
-  }, [activeNote?.id, localTitle]);
+    document.title = sync.authStatus === 'signed-in' && activeNote
+      ? `${activeNote.title || noteTitleFromText(activeNote.contentText)} — Notes`
+      : 'Notes';
+  }, [activeNote?.id, activeNote?.title, activeNote?.contentText, sync.authStatus]);
 
   useEffect(() => {
     writeWorkspaceLayout({ listCollapsed, sidebarCollapsed });
@@ -1237,7 +1222,12 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || document.querySelector('[aria-modal="true"]')) return;
       const command = event.metaKey || event.ctrlKey;
+      if (!isMobileLayout && command && event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        toggleFocusMode();
+      }
       if (command && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         if (!isMobileLayout) setListCollapsed(false);
@@ -1397,10 +1387,73 @@ export function App() {
     }, 0);
   };
 
-  const focusWritingSurface = () => {
-    editorPanelRef.current
-      ?.querySelector<HTMLElement>('.rich-text-editor__prose, .rich-text-editor__surface--plain textarea')
-      ?.focus();
+  const toggleFocusMode = () => {
+    if (focusMode) {
+      const previous = previousLayoutRef.current ?? { sidebarCollapsed: false, listCollapsed: false };
+      setSidebarCollapsed(previous.sidebarCollapsed);
+      setListCollapsed(previous.listCollapsed);
+    } else {
+      previousLayoutRef.current = { sidebarCollapsed, listCollapsed };
+      setSidebarCollapsed(true);
+      setListCollapsed(true);
+    }
+  };
+
+  const beginRename = (note: NoteRecord) => {
+    setRenameNoteId(note.id);
+    setRenameDraft(note.title || noteTitleFromText(note.contentText));
+    setNoteDetailsOpen(false);
+  };
+
+  const closeRename = useCallback(() => setRenameNoteId(undefined), []);
+
+  const submitRename = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = renameDraft.trim().replace(/\s+/g, ' ').slice(0, 240);
+    if (!renameNoteId || !name) return;
+    const note = allNotes.find((candidate) => candidate.id === renameNoteId);
+    if (!note || note.deleted) { closeRename(); return; }
+    if (autoTitleNoteIdRef.current === renameNoteId) autoTitleNoteIdRef.current = undefined;
+    queueNotePatch(renameNoteId, { title: name });
+    void flushNote(renameNoteId);
+    closeRename();
+  };
+
+  const duplicateNote = async (note: NoteRecord) => {
+    if (creating) return;
+    if (sync.syncStatus === 'offline' || !navigator.onLine) {
+      showToast('Reconnect before duplicating a note');
+      return;
+    }
+    const generation = workspaceGenerationRef.current;
+    setCreating(true);
+    setNoteDetailsOpen(false);
+    try {
+      const id = await sync.createNote({
+        title: `${note.title || noteTitleFromText(note.contentText)} (copy)`.slice(0, 240),
+        content: note.content,
+        contentText: note.contentText,
+        richBackup: note.richBackup,
+        format: note.format,
+        folderId: note.folderId,
+        labels: [...note.labels],
+        pinned: note.pinned,
+      });
+      if (workspaceGenerationRef.current !== generation) return;
+      autoTitleNoteIdRef.current = undefined;
+      setSearch('');
+      setView(note.folderId === 'inbox' ? 'inbox' : `folder:${note.folderId}`);
+      setFormatFilter('all');
+      setNoteSort('recent');
+      waitForCreatedNote(id);
+      setActiveNoteId(id);
+      setMobilePane('editor');
+      showToast('Note duplicated');
+    } catch {
+      if (workspaceGenerationRef.current === generation) showToast('Could not duplicate the note');
+    } finally {
+      if (workspaceGenerationRef.current === generation) setCreating(false);
+    }
   };
 
   async function createNewNote() {
@@ -1431,7 +1484,7 @@ export function App() {
         pinned: view === 'pinned',
       });
       if (workspaceGenerationRef.current !== generation) return;
-      waitForCreatedNote(id, false);
+      waitForCreatedNote(id);
       autoTitleNoteIdRef.current = id;
       setActiveNoteId(id);
       setMobilePane('editor');
@@ -1471,7 +1524,7 @@ export function App() {
       setView('inbox');
       setNoteSort('recent');
       setFormatFilter('all');
-      waitForCreatedNote(id, false);
+      waitForCreatedNote(id);
       setActiveNoteId(id);
       setMobilePane('editor');
       showToast('Captured and syncing');
@@ -1502,7 +1555,7 @@ export function App() {
   const copyNote = async (note: NoteRecord) => {
     const generation = workspaceGenerationRef.current;
     const body = note.format === 'rich' ? richContentToPlainText(note.content) : note.content;
-    const value = [note.title, body].filter(Boolean).join('\n\n');
+    const value = body;
     try {
       await navigator.clipboard.writeText(value);
       if (workspaceGenerationRef.current === generation) showToast('Copied to clipboard');
@@ -1587,13 +1640,13 @@ export function App() {
       contentText: change.contentText,
       format: change.format,
     };
-    if (autoTitleNoteIdRef.current === activeNote.id) {
+    if (autoTitleNoteIdRef.current === activeNote.id || !activeNote.title) {
+      autoTitleNoteIdRef.current = activeNote.id;
       const derivedTitle = change.contentText.trim()
         ? noteTitleFromText(change.contentText)
         : '';
       if (derivedTitle !== activeNote.title) {
         patch.title = derivedTitle;
-        setLocalTitle(derivedTitle);
       }
     }
     queueNotePatch(activeNote.id, patch);
@@ -1736,6 +1789,7 @@ export function App() {
       onSelect={() => selectNote(note.id)}
       onNavigate={(direction) => navigateNoteList(note.id, direction)}
       onCopy={() => void copyNote(note)}
+      onRename={() => beginRename(note)}
       onTrash={() => trashNote(note)}
       onRestore={() => restoreNote(note)}
     />
@@ -1755,7 +1809,7 @@ export function App() {
   const mobileChromeHidden = isMobileLayout && (mobileNavOpen || mobilePane === 'editor');
 
   return (
-    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${listCollapsed ? 'list-collapsed' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
+    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${listCollapsed ? 'list-collapsed' : ''} ${focusMode ? 'is-focused' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
       <aside
         ref={sidebarRef}
         className="sidebar"
@@ -1980,7 +2034,7 @@ export function App() {
               onClick={() => setListOptionsOpen((open) => !open)}
               title="Pinned notes first; choose sort and format filter"
             >
-              {noteSort === 'recent' ? 'Pinned + newest' : noteSort === 'oldest' ? 'Pinned + oldest' : 'Pinned + title'} <CaretDown aria-hidden="true" />
+              {noteSort === 'recent' ? 'Pinned + newest' : noteSort === 'oldest' ? 'Pinned + oldest' : 'Pinned + name'} <CaretDown aria-hidden="true" />
             </button>
             <button
               className="filter-icon"
@@ -1999,7 +2053,7 @@ export function App() {
                   {([
                     ['recent', 'Newest first'],
                     ['oldest', 'Oldest first'],
-                    ['title', 'Title A–Z'],
+                    ['title', 'Name A–Z'],
                   ] as const).map(([value, label]) => (
                     <button key={value} type="button" onClick={() => setNoteSort(value)} aria-pressed={noteSort === value}>
                       <span>{label}</span>{noteSort === value && <Check aria-hidden="true" />}
@@ -2093,8 +2147,10 @@ export function App() {
                   void flushNote(activeNote.id);
                   setMobilePane('notes');
                 }} aria-label="Back to note list"><ArrowLeft aria-hidden="true" /></button>
-                <span>{displayDate(activeNote.updatedAt)}</span>
-                <span className="meta-dot">•</span>
+                <button className="editor-note-name" type="button" onClick={() => beginRename(activeNote)} disabled={activeNoteTrashed} title="Rename note">
+                  <span>{activeNote.title || noteTitleFromText(activeNote.contentText)}</span>
+                  {!activeNoteTrashed && <PencilSimple aria-hidden="true" />}
+                </button>
                 <div className="folder-picker-wrap" ref={folderPickerRef}>
                   <button className="meta-link" type="button" onClick={() => setFolderMenuOpen((open) => !open)} aria-haspopup="dialog" aria-controls="folder-menu" aria-expanded={folderMenuOpen}>
                     {folders.find((folder) => folder.id === activeNote.folderId)?.name || 'Inbox'} <CaretDown aria-hidden="true" />
@@ -2116,7 +2172,12 @@ export function App() {
                 </div>
               </div>
               <div className="editor-actions">
-                <button className="copy-note-button" type="button" onClick={() => void copyNote(activeNote)}><Copy aria-hidden="true" /><span>Copy note</span></button>
+                {!isMobileLayout && (
+                  <button className={`icon-button focus-button ${focusMode ? 'is-active' : ''}`} type="button" onClick={toggleFocusMode} aria-label={focusMode ? 'Exit focus mode' : 'Focus mode'} aria-pressed={focusMode} title="Focus mode (⌘⇧F)">
+                    {focusMode ? <CornersIn aria-hidden="true" /> : <CornersOut aria-hidden="true" />}
+                  </button>
+                )}
+                <button className="copy-note-button" type="button" aria-label="Copy note" title="Copy note" onClick={() => void copyNote(activeNote)}><Copy aria-hidden="true" /><span>Copy note</span></button>
                 <button className={`icon-button ${activeNote.pinned ? 'is-active' : ''}`} type="button" onClick={() => queueNotePatch(activeNote.id, { pinned: !activeNote.pinned })} aria-label={activeNote.pinned ? 'Unpin note' : 'Pin note'} title={activeNote.pinned ? 'Unpin note' : 'Pin note'}>
                   <PushPin weight={activeNote.pinned ? 'fill' : 'regular'} aria-hidden="true" />
                 </button>
@@ -2167,6 +2228,21 @@ export function App() {
                       <p><span>Updated</span><strong>{displayDate(activeNote.updatedAt)}</strong></p>
                       <p><span>Characters</span><strong>{activeNote.contentText.length.toLocaleString()}</strong></p>
                       <div className="popover-divider" />
+                      <button className="note-details-action" type="button" onClick={() => { void copyNote(activeNote); setNoteDetailsOpen(false); }}><Copy aria-hidden="true" />Copy body</button>
+                      {!activeNoteTrashed && (
+                        <label className="note-folder-field">Move to folder
+                          <select value={activeNote.folderId} onChange={(event) => { queueNotePatch(activeNote.id, { folderId: event.target.value }); setNoteDetailsOpen(false); }}>
+                            <option value="inbox">Inbox</option>
+                            {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                          </select>
+                        </label>
+                      )}
+                      {!activeNoteTrashed && (
+                        <>
+                          <button className="note-details-action" type="button" onClick={() => beginRename(activeNote)}><PencilSimple aria-hidden="true" />Rename note</button>
+                          <button className="note-details-action" type="button" disabled={creating || offline} onClick={() => void duplicateNote(activeNote)}><Copy aria-hidden="true" />Duplicate note</button>
+                        </>
+                      )}
                       {activeNoteTrashed ? (
                         <button className="note-details-action" type="button" onClick={() => void restoreNote(activeNote)}>
                           <ArrowCounterClockwise aria-hidden="true" />Restore note
@@ -2227,28 +2303,6 @@ export function App() {
                     format={activeNote.format}
                     content={activeNote.content}
                     richBackup={activeNote.richBackup}
-                    titleSlot={(
-                      <textarea
-                        ref={titleRef}
-                        className="note-title-input"
-                        rows={1}
-                        value={localTitle}
-                        onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
-                          const value = event.target.value.replace(/\r?\n/g, ' ').slice(0, 240);
-                          autoTitleNoteIdRef.current = undefined;
-                          setLocalTitle(value);
-                          queueNotePatch(activeNote.id, { title: value });
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter') return;
-                          event.preventDefault();
-                          focusWritingSurface();
-                        }}
-                        onBlur={() => void flushNote(activeNote.id)}
-                        aria-label="Note title"
-                        placeholder="Title"
-                      />
-                    )}
                     footerSlot={(
                       <footer className="editor-footer">
                         <span>{activeNote.contentText.trim() ? `${activeNote.contentText.trim().split(/\s+/).length} words` : '0 words'}</span>
@@ -2291,6 +2345,25 @@ export function App() {
 
       {mobileNavOpen && <button className="mobile-nav-scrim" type="button" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" />}
 
+      {renameNoteId && (
+        <ModalShell label="Rename note" onClose={closeRename}>
+          <form className="folder-modal rename-modal" onSubmit={submitRename}>
+            <header>
+              <span className="modal-icon"><PencilSimple aria-hidden="true" /></span>
+              <div><h2>Rename note</h2></div>
+              <button className="modal-close" type="button" onClick={closeRename} aria-label="Close"><X aria-hidden="true" /></button>
+            </header>
+            <label htmlFor="note-name">Note name</label>
+            <input data-autofocus id="note-name" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onFocus={(event) => event.target.select()} maxLength={240} autoFocus />
+            <p>This name appears in the sidebar. Your writing stays as it is.</p>
+            <footer>
+              <button className="secondary-button" type="button" onClick={closeRename}>Cancel</button>
+              <button className="primary-button" type="submit" disabled={!renameDraft.trim()}>Save name</button>
+            </footer>
+          </form>
+        </ModalShell>
+      )}
+
       {quickCaptureOpen && (
         <ModalShell label="Quick capture" onClose={() => setQuickCaptureOpen(false)}>
           <form className="quick-capture-modal" onSubmit={submitQuickCapture}>
@@ -2301,7 +2374,7 @@ export function App() {
             </header>
             <p>Drop a thought now and shape it later. New captures stay in plain text until you switch a note to rich text.</p>
             <div className="quick-capture-hints" aria-label="Capture tips">
-              <span>Plain text</span><span>First line becomes the title</span><span>Switch to rich later</span>
+              <span>Plain text</span><span>Named from your first line</span><span>Switch to rich later</span>
             </div>
             <textarea
               ref={quickRef}

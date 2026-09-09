@@ -13,7 +13,7 @@ function makeNote(overrides: Partial<NoteRecord> = {}): NoteRecord {
   return {
     id: 'note-1',
     title: 'Swipe me',
-    content: '<p>Keep this thought.</p>',
+    content: JSON.stringify({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Keep this thought.' }] }] }),
     contentText: 'Keep this thought.',
     richBackup: '',
     format: 'rich',
@@ -167,7 +167,8 @@ describe('Editor', () => {
     await waitFor(() => {
       expect(container.querySelector('.rich-text-editor')).not.toBeNull();
     });
-    expect(screen.getByLabelText('Note title')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Note title')).not.toBeInTheDocument();
+    expect(container.querySelector('.rich-text-editor__prose')).toHaveTextContent('Keep this thought.');
   });
 
   it('creates inside the current label as plain text and focuses the writing surface', async () => {
@@ -272,5 +273,70 @@ describe('Workspace usability', () => {
     expect(screen.getByRole('button', { name: 'Show note list' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show note list' }));
     expect(shell).not.toHaveClass('list-collapsed');
+  });
+});
+
+
+describe('Note names and writing tools', () => {
+  it('renames from the sidebar without changing the body and preserves the name while writing', async () => {
+    const api = useMockSync([makeNote({ format: 'plain', content: 'Keep this thought.' })]);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rename Swipe me' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note name' }), { target: { value: 'My notebook' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() => expect(api.updateNote).toHaveBeenCalledWith('note-1', { title: 'My notebook' }, 0));
+    const body = await screen.findByRole('textbox', { name: 'Plain text note' });
+    expect(body).toHaveValue('Keep this thought.');
+    fireEvent.change(body, { target: { value: 'Updated writing' } });
+    fireEvent.blur(body);
+    await waitFor(() => expect(api.updateNote).toHaveBeenLastCalledWith('note-1', {
+      content: 'Updated writing', contentText: 'Updated writing', format: 'plain',
+    }, 1));
+  });
+
+  it('opens rename with F2 and cancels without saving', async () => {
+    const api = useMockSync([makeNote()]);
+    const { container } = render(<App />);
+    fireEvent.keyDown(container.querySelector('.note-row-select')!, { key: 'F2' });
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Note name' })).toHaveFocus());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Note name' }), { target: { value: 'Discard this name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Rename note' })).not.toBeInTheDocument();
+    expect(api.updateNote).not.toHaveBeenCalled();
+  });
+
+  it('duplicates the latest body, formatting backup, folder, and labels', async () => {
+    const original = makeNote({ format: 'plain', content: 'Original body', richBackup: '<p><strong>Original body</strong></p>', labels: ['Planning'], pinned: true });
+    const api = useMockSync([original]);
+    render(<App />);
+    const body = await screen.findByRole('textbox', { name: 'Plain text note' });
+    fireEvent.change(body, { target: { value: 'Newest draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Note details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate note' }));
+    await waitFor(() => expect(api.createNote).toHaveBeenCalledWith({
+      title: 'Swipe me (copy)', content: 'Newest draft', contentText: 'Newest draft',
+      richBackup: original.richBackup, format: 'plain', folderId: 'inbox', labels: ['Planning'], pinned: true,
+    }));
+    expect(api.setNoteTrashed).not.toHaveBeenCalled();
+  });
+
+  it('copies only the body, leaving the sidebar name out', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    useMockSync([makeNote()]);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy note' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Keep this thought.'));
+  });
+
+  it('restores the previous panel layout when leaving focus mode', () => {
+    useMockSync([makeNote()]);
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide folders' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Focus mode' }));
+    expect(container.querySelector('main')).toHaveClass('is-focused', 'sidebar-collapsed', 'list-collapsed');
+    fireEvent.click(screen.getByRole('button', { name: 'Exit focus mode' }));
+    expect(container.querySelector('main')).toHaveClass('sidebar-collapsed');
+    expect(container.querySelector('main')).not.toHaveClass('is-focused', 'list-collapsed');
   });
 });
