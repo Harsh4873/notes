@@ -2879,6 +2879,16 @@ button.rich-text-editor__smart:hover {
   margin: 0 0 1.08em;
 }
 
+.rich-text-editor__prose img,
+.ProseMirror img.notes-embedded-image,
+.ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.85em 0;
+  border-radius: 10px;
+}
+
 .rich-text-editor__prose h1,
 .rich-text-editor__prose h2,
 .rich-text-editor__prose h3 {

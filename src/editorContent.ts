@@ -595,6 +595,9 @@ const serializeBlockNode = (node: RichTextNode): string => {
       return `\`\`\`\n${(node.content ?? []).map(child => child.text ?? '').join('')}\n\`\`\``;
     case 'horizontalRule':
       return '---';
+    case 'image':
+      // Plain mode cannot carry embeds; richBackup restores them when text is unchanged.
+      return '';
     case 'table': {
       const rows = (node.content ?? []).map(row => (row.content ?? []).map(cell =>
         (cell.content ?? [])
@@ -638,6 +641,9 @@ const collectReadableText = (node: RichTextNode): string => {
     return '\n';
   }
   if (node.type === 'horizontalRule') {
+    return '';
+  }
+  if (node.type === 'image') {
     return '';
   }
   if (node.type === 'table') {

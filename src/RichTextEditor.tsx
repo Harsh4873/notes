@@ -8,6 +8,7 @@ import { CodeBlock } from '@phosphor-icons/react/CodeBlock';
 import { ColumnsPlusRight } from '@phosphor-icons/react/ColumnsPlusRight';
 import { DotsThree } from '@phosphor-icons/react/DotsThree';
 import { Highlighter } from '@phosphor-icons/react/Highlighter';
+import { Image as ImageIcon } from '@phosphor-icons/react/Image';
 import { LinkSimple } from '@phosphor-icons/react/LinkSimple';
 import { ListBullets } from '@phosphor-icons/react/ListBullets';
 import { ListNumbers } from '@phosphor-icons/react/ListNumbers';
@@ -28,6 +29,7 @@ import { TextUnderline } from '@phosphor-icons/react/TextUnderline';
 import { X } from '@phosphor-icons/react/X';
 import Color from '@tiptap/extension-color';
 import Highlight from '@tiptap/extension-highlight';
+import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit } from '@tiptap/extension-table';
 import TaskItem from '@tiptap/extension-task-item';
@@ -35,6 +37,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Fragment, Slice } from '@tiptap/pm/model';
+import { TextSelection } from '@tiptap/pm/state';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from 'react';
@@ -52,6 +55,18 @@ import {
   type EditorContentValue,
   type EditorFormat,
 } from './editorContent';
+import {
+  ACCEPTED_IMAGE_EXTENSIONS,
+  ACCEPTED_IMAGE_MIME_TYPES,
+  ImageAttachmentError,
+  imageFitsNoteBudget,
+  looksLikeImageFile,
+  processImageFile,
+} from './imageAttachments';
+import {
+  MAX_NOTE_CONTENT_LENGTH,
+  MAX_NOTE_TEXT_BYTES,
+} from './notesCore';
 
 export interface RichTextEditorProps {
   noteId: string;
@@ -108,10 +123,44 @@ const EDITOR_EXTENSIONS = [
     types: ['heading', 'paragraph'],
     alignments: ['left', 'center', 'right'],
   }),
+  Image.extend({
+    addAttributes() {
+      return {
+        ...this.parent?.(),
+        src: {
+          default: null,
+          parseHTML: (element: HTMLElement) => {
+            const src = element.getAttribute('src');
+            // In-note embeds are data URLs only — no hotlinked remote images.
+            if (!src || !src.startsWith('data:image/')) {
+              return null;
+            }
+            return src;
+          },
+          renderHTML: (attributes: Record<string, unknown>) => {
+            if (!attributes.src) {
+              return {};
+            }
+            return { src: attributes.src };
+          },
+        },
+      };
+    },
+  }).configure({
+    allowBase64: true,
+    HTMLAttributes: {
+      class: 'notes-embedded-image',
+    },
+  }),
   Placeholder.configure({
     placeholder: 'Start writing…',
   }),
 ];
+
+const IMAGE_FILE_ACCEPT = [
+  ...ACCEPTED_IMAGE_MIME_TYPES,
+  ...ACCEPTED_IMAGE_EXTENSIONS,
+].join(',');
 
 interface ToolbarButtonProps {
   label: string;
@@ -191,12 +240,17 @@ export function RichTextEditor({
   const [moreOpen, setMoreOpen] = useState(false);
   const [morePosition, setMorePosition] = useState({ top: 0, left: 0 });
   const [smartMessage, setSmartMessage] = useState<string | null>(null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const richBackupRef = useRef(richBackup);
+  const insertImageFromFileRef = useRef<(file: File) => Promise<void>>(async () => {});
 
   formatRef.current = format;
   smartFormattingRef.current = smartFormatting;
   onChangeRef.current = onChange;
   onFormatChangeRef.current = onFormatChange;
   onBlurRef.current = onBlur;
+  richBackupRef.current = richBackup;
 
   const editor = useEditor(
     {
@@ -218,8 +272,40 @@ export function RichTextEditor({
             return false;
           }
 
+          const clipboardFiles = Array.from(event.clipboardData?.files ?? []);
+          const imageFiles = clipboardFiles.filter(looksLikeImageFile);
+          if (imageFiles.length === 0 && event.clipboardData?.items) {
+            for (const item of Array.from(event.clipboardData.items)) {
+              if (item.kind !== 'file' || !item.type.startsWith('image/')) {
+                continue;
+              }
+              const file = item.getAsFile();
+              if (file && looksLikeImageFile(file)) {
+                imageFiles.push(file);
+              }
+            }
+          }
+
+          if (imageFiles.length > 0) {
+            event.preventDefault();
+            if (formatRef.current !== 'rich') {
+              setSmartMessage('Switch to rich text to embed images.');
+              return true;
+            }
+            void insertImageFromFileRef.current(imageFiles[0]!);
+            return true;
+          }
+
           const text = event.clipboardData?.getData('text/plain') ?? '';
           const html = event.clipboardData?.getData('text/html') ?? '';
+
+          // Block HTML-only image pastes (hotlinks) — embeds must be compressed data URLs.
+          if (/<img\b/i.test(html) && !text.trim()) {
+            event.preventDefault();
+            setSmartMessage('Use Insert image or paste an image file to embed.');
+            return true;
+          }
+
           if (
             !smartFormattingRef.current ||
             !text ||
@@ -242,6 +328,39 @@ export function RichTextEditor({
           } catch {
             return false;
           }
+        },
+        handleDrop(view, event, _slice, moved) {
+          if (moved) {
+            return false;
+          }
+
+          const imageFiles = Array.from(event.dataTransfer?.files ?? []).filter(
+            looksLikeImageFile,
+          );
+          if (imageFiles.length === 0) {
+            return false;
+          }
+
+          event.preventDefault();
+          if (formatRef.current !== 'rich') {
+            setSmartMessage('Switch to rich text to embed images.');
+            return true;
+          }
+
+          const coords = view.posAtCoords({
+            left: event.clientX,
+            top: event.clientY,
+          });
+          if (coords) {
+            view.dispatch(
+              view.state.tr.setSelection(
+                TextSelection.create(view.state.doc, coords.pos),
+              ),
+            );
+          }
+
+          void insertImageFromFileRef.current(imageFiles[0]!);
+          return true;
         },
       },
       onUpdate({ editor: nextEditor }) {
@@ -274,7 +393,7 @@ export function RichTextEditor({
 
     const timeout = window.setTimeout(() => {
       setSmartMessage(null);
-    }, 1800);
+    }, 2800);
     return () => window.clearTimeout(timeout);
   }, [smartMessage]);
 
@@ -413,6 +532,71 @@ export function RichTextEditor({
     setLinkError('');
   };
 
+  const insertImageFromFile = async (file: File) => {
+    if (formatRef.current !== 'rich' || !editor || editor.isDestroyed) {
+      setSmartMessage('Switch to rich text to embed images.');
+      return;
+    }
+
+    if (!looksLikeImageFile(file)) {
+      setSmartMessage('That file is not a supported image.');
+      return;
+    }
+
+    try {
+      setImageBusy(true);
+      const processed = await processImageFile(file);
+      const document = editor.getJSON();
+      const content = serializeRichDocument(document);
+      const contentText = richDocumentToContentText(document);
+      const backup = richBackupRef.current || '';
+      const encoder = new TextEncoder();
+      const fit = imageFitsNoteBudget({
+        encodedLength: processed.encodedLength,
+        contentBytes: encoder.encode(content).byteLength,
+        contentTextBytes: encoder.encode(contentText).byteLength,
+        richBackupBytes: encoder.encode(backup).byteLength,
+        contentLength: content.length,
+        maxTextBytes: MAX_NOTE_TEXT_BYTES,
+        maxContentLength: MAX_NOTE_CONTENT_LENGTH,
+      });
+
+      if (!fit.fits) {
+        setSmartMessage(
+          fit.reason ?? 'This note is already too full to embed another image.',
+        );
+        return;
+      }
+
+      editor
+        .chain()
+        .focus()
+        .setImage({
+          src: processed.dataUrl,
+          alt: (file as File).name?.replace(/\.[^.]+$/, '') || 'Embedded image',
+        })
+        .run();
+      setSmartMessage('Image embedded');
+    } catch (error) {
+      const message =
+        error instanceof ImageAttachmentError
+          ? error.message
+          : 'Could not embed that image.';
+      setSmartMessage(message);
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
+  insertImageFromFileRef.current = insertImageFromFile;
+
+  const openImagePicker = () => {
+    if (formatRef.current !== 'rich' || imageBusy) {
+      return;
+    }
+    imageInputRef.current?.click();
+  };
+
   const switchFormat = (nextFormat: EditorFormat) => {
     if (nextFormat === format) {
       return;
@@ -448,6 +632,22 @@ export function RichTextEditor({
       data-toolbar-revision={toolbarRevision}
       aria-label="Note editor"
     >
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={IMAGE_FILE_ACCEPT}
+        hidden
+        tabIndex={-1}
+        aria-hidden="true"
+        data-testid="rich-text-image-input"
+        onChange={event => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          if (file) {
+            void insertImageFromFile(file);
+          }
+        }}
+      />
       <div className={`rich-text-editor__chrome ${format === 'plain' ? 'is-plain' : ''}`}>
         <div
           className="rich-text-editor__toolbar"
@@ -619,6 +819,13 @@ export function RichTextEditor({
           >
             <Table size={17} aria-hidden="true" />
           </ToolbarButton>
+          <ToolbarButton
+            label="Insert image"
+            disabled={!richEnabled || imageBusy}
+            onClick={openImagePicker}
+          >
+            <ImageIcon size={17} aria-hidden="true" />
+          </ToolbarButton>
           <span className="rich-text-editor__separator" aria-hidden="true" />
 
           <ToolbarButton
@@ -745,6 +952,15 @@ export function RichTextEditor({
                     Insert table
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={imageBusy}
+                  onClick={() => runMoreCommand(openImagePicker)}
+                >
+                  <ImageIcon size={16} aria-hidden="true" />
+                  Insert image
+                </button>
                 <button
                   type="button"
                   role="menuitemradio"
