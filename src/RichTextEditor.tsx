@@ -38,7 +38,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Fragment, Slice } from '@tiptap/pm/model';
 import { TextSelection } from '@tiptap/pm/state';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from 'react';
 import { useEffect, useId, useRef, useState } from 'react';
@@ -59,9 +59,16 @@ import {
   ACCEPTED_IMAGE_EXTENSIONS,
   ACCEPTED_IMAGE_MIME_TYPES,
   ImageAttachmentError,
+  altTextForImageFile,
+  clipboardTextIsIncidental,
+  embeddedImagesInDocument,
+  fileFromImageDataUrl,
+  imageDataUrlsFromHtml,
+  imageFilesFromDataTransfer,
   imageFitsNoteBudget,
   looksLikeImageFile,
   processImageFile,
+  type ProcessedImage,
 } from './imageAttachments';
 import {
   MAX_NOTE_CONTENT_LENGTH,
@@ -158,9 +165,175 @@ const EDITOR_EXTENSIONS = [
 ];
 
 const IMAGE_FILE_ACCEPT = [
+  'image/*',
   ...ACCEPTED_IMAGE_MIME_TYPES,
   ...ACCEPTED_IMAGE_EXTENSIONS,
 ].join(',');
+
+interface GalleryImage {
+  key: string;
+  pos: number | null;
+  src: string;
+  alt: string;
+}
+
+function imagesInEditor(editor: Editor): GalleryImage[] {
+  const images: GalleryImage[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'image') return;
+    const src = node.attrs.src;
+    if (typeof src !== 'string' || !src.startsWith('data:image/')) return;
+    const alt = typeof node.attrs.alt === 'string' && node.attrs.alt.trim()
+      ? node.attrs.alt.trim()
+      : 'Embedded image';
+    images.push({ key: `${pos}`, pos, src, alt });
+  });
+  return images;
+}
+
+function appendImageNode<T extends { type: 'doc'; content: Array<{ type: string; attrs?: Record<string, unknown>; content?: unknown[] }> }>(
+  document: T,
+  image: { dataUrl: string; alt: string },
+): T {
+  return {
+    ...document,
+    content: [
+      ...document.content,
+      { type: 'image', attrs: { src: image.dataUrl, alt: image.alt } },
+    ],
+  };
+}
+
+async function readClipboardImageFiles(): Promise<File[]> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return [];
+  try {
+    const items = await navigator.clipboard.read();
+    const files: File[] = [];
+    for (const item of items) {
+      const type = item.types.find(entry => entry.startsWith('image/'));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      const extension = (blob.type || type).slice('image/'.length).replace('jpeg', 'jpg') || 'png';
+      files.push(new File([blob], `pasted-image.${extension}`, { type: blob.type || type }));
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+interface ImageGalleryProps {
+  images: GalleryImage[];
+  busy: boolean;
+  error: string;
+  plainMode: boolean;
+  onClose: () => void;
+  onAdd: () => void;
+  onShow: (image: GalleryImage) => void;
+  onRemove: (image: GalleryImage) => void;
+}
+
+function ImageGallery({
+  images,
+  busy,
+  error,
+  plainMode,
+  onClose,
+  onAdd,
+  onShow,
+  onRemove,
+}: ImageGalleryProps) {
+  const titleId = useId();
+  return (
+    <section
+      className="image-gallery"
+      id="note-image-gallery"
+      role="dialog"
+      aria-labelledby={titleId}
+    >
+      <header className="image-gallery__header">
+        <h2 id={titleId}>Images</h2>
+        <button type="button" onClick={onClose} aria-label="Close images">
+          <X size={16} aria-hidden="true" />
+        </button>
+      </header>
+      <p className="image-gallery__hint">
+        Images stay inside this note. They are not sent to a separate image host.
+        {plainMode
+          ? ' Adding a photo switches this note to rich text so the picture can stay with the writing.'
+          : ''}
+      </p>
+      {error ? (
+        <p className="image-gallery__error" role="alert">{error}</p>
+      ) : null}
+      {busy ? (
+        <p className="image-gallery__status" role="status">Adding image…</p>
+      ) : null}
+      {images.length === 0 ? (
+        <div className="image-gallery__empty">
+          <ImageIcon size={22} aria-hidden="true" />
+          <p>No images in this note yet.</p>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onAdd}
+            disabled={busy}
+          >
+            Add from photos
+          </button>
+        </div>
+      ) : (
+        <>
+          <ul className="image-gallery__grid">
+            {images.map(image => (
+              <li key={image.key} className="image-gallery__card">
+                <button
+                  type="button"
+                  className="image-gallery__thumb"
+                  onClick={() => onShow(image)}
+                  aria-label={`Show ${image.alt} in the note`}
+                >
+                  <img src={image.src} alt="" />
+                </button>
+                <div className="image-gallery__meta">
+                  <span className="image-gallery__name">{image.alt}</span>
+                  {image.pos !== null ? (
+                    <button
+                      type="button"
+                      className="image-gallery__remove"
+                      onClick={() => onRemove(image)}
+                      aria-label={`Remove ${image.alt}`}
+                    >
+                      Remove
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="image-gallery__remove"
+                      onClick={() => onShow(image)}
+                    >
+                      Show
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="image-gallery__actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={onAdd}
+              disabled={busy}
+            >
+              Add from photos
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
 interface ToolbarButtonProps {
   label: string;
@@ -241,9 +414,15 @@ export function RichTextEditor({
   const [morePosition, setMorePosition] = useState({ top: 0, left: 0 });
   const [smartMessage, setSmartMessage] = useState<string | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryError, setGalleryError] = useState('');
   const imageInputRef = useRef<HTMLInputElement>(null);
   const richBackupRef = useRef(richBackup);
-  const insertImageFromFileRef = useRef<(file: File) => Promise<void>>(async () => {});
+  const plainValueRef = useRef(plainValue);
+  const embedFilesRef = useRef<(files: File[]) => Promise<void>>(async () => {});
+  const capturedPasteFilesRef = useRef<File[] | null>(null);
+  const pendingClipboardReadRef = useRef<Promise<File[]> | null>(null);
+  const editorRef = useRef<Editor | null>(null);
 
   formatRef.current = format;
   smartFormattingRef.current = smartFormatting;
@@ -251,6 +430,7 @@ export function RichTextEditor({
   onFormatChangeRef.current = onFormatChange;
   onBlurRef.current = onBlur;
   richBackupRef.current = richBackup;
+  plainValueRef.current = plainValue;
 
   const editor = useEditor(
     {
@@ -267,42 +447,53 @@ export function RichTextEditor({
           spellcheck: 'true',
           autocapitalize: 'sentences',
         },
+        transformPastedHTML(html) {
+          return html.replace(/<img\b[^>]*>/gi, '');
+        },
         handlePaste(view, event) {
           if (view.state.selection.$from.parent.type.name === 'codeBlock') {
+            capturedPasteFilesRef.current = null;
+            pendingClipboardReadRef.current = null;
             return false;
           }
 
-          const clipboardFiles = Array.from(event.clipboardData?.files ?? []);
-          const imageFiles = clipboardFiles.filter(looksLikeImageFile);
-          if (imageFiles.length === 0 && event.clipboardData?.items) {
-            for (const item of Array.from(event.clipboardData.items)) {
-              if (item.kind !== 'file' || !item.type.startsWith('image/')) {
-                continue;
-              }
-              const file = item.getAsFile();
-              if (file && looksLikeImageFile(file)) {
-                imageFiles.push(file);
-              }
-            }
-          }
-
-          if (imageFiles.length > 0) {
-            event.preventDefault();
-            if (formatRef.current !== 'rich') {
-              setSmartMessage('Switch to rich text to embed images.');
-              return true;
-            }
-            void insertImageFromFileRef.current(imageFiles[0]!);
-            return true;
-          }
-
+          const captured = capturedPasteFilesRef.current;
+          capturedPasteFilesRef.current = null;
+          const pendingRead = pendingClipboardReadRef.current;
+          pendingClipboardReadRef.current = null;
           const text = event.clipboardData?.getData('text/plain') ?? '';
           const html = event.clipboardData?.getData('text/html') ?? '';
 
-          // Block HTML-only image pastes (hotlinks) — embeds must be compressed data URLs.
-          if (/<img\b/i.test(html) && !text.trim()) {
+          if (captured && captured.length > 0) {
+            const exclusive = clipboardTextIsIncidental(text);
+            if (exclusive) event.preventDefault();
+            void embedFilesRef.current(captured);
+            return exclusive;
+          }
+
+          if (pendingRead || (/<img\b/i.test(html) && clipboardTextIsIncidental(text))) {
             event.preventDefault();
-            setSmartMessage('Use Insert image or paste an image file to embed.');
+            const read = pendingRead ?? readClipboardImageFiles();
+            void read.then(files => {
+              if (files.length > 0) {
+                void embedFilesRef.current(files);
+                return;
+              }
+              const dataFiles = imageDataUrlsFromHtml(html).flatMap((url, index) => {
+                try {
+                  return [fileFromImageDataUrl(url, `pasted-image-${index + 1}`)];
+                } catch {
+                  return [];
+                }
+              });
+              if (dataFiles.length > 0) {
+                void embedFilesRef.current(dataFiles);
+                return;
+              }
+              const message = 'That paste did not include the image file. Open Images and add it from your photos.';
+              setSmartMessage(message);
+              setGalleryError(message);
+            });
             return true;
           }
 
@@ -334,24 +525,17 @@ export function RichTextEditor({
             return false;
           }
 
-          const imageFiles = Array.from(event.dataTransfer?.files ?? []).filter(
-            looksLikeImageFile,
-          );
+          const imageFiles = imageFilesFromDataTransfer(event.dataTransfer);
           if (imageFiles.length === 0) {
             return false;
           }
 
           event.preventDefault();
-          if (formatRef.current !== 'rich') {
-            setSmartMessage('Switch to rich text to embed images.');
-            return true;
-          }
-
           const coords = view.posAtCoords({
             left: event.clientX,
             top: event.clientY,
           });
-          if (coords) {
+          if (coords && formatRef.current === 'rich') {
             view.dispatch(
               view.state.tr.setSelection(
                 TextSelection.create(view.state.doc, coords.pos),
@@ -359,7 +543,7 @@ export function RichTextEditor({
             );
           }
 
-          void insertImageFromFileRef.current(imageFiles[0]!);
+          void embedFilesRef.current(imageFiles);
           return true;
         },
       },
@@ -386,6 +570,54 @@ export function RichTextEditor({
     [],
   );
 
+  editorRef.current = editor;
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    let dom: HTMLElement;
+    try {
+      dom = editor.view.dom;
+    } catch {
+      return;
+    }
+    const onPasteCapture = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      if (!data) return;
+      const parentName = editor.state.selection.$from.parent.type.name;
+      if (parentName === 'codeBlock') return;
+      // Read files before any getData call. Chromium drops file items once text is read.
+      const files = imageFilesFromDataTransfer(data);
+      if (files.length > 0) {
+        capturedPasteFilesRef.current = files;
+        return;
+      }
+      const html = data.getData('text/html') ?? '';
+      const dataUrls = imageDataUrlsFromHtml(html);
+      if (dataUrls.length > 0) {
+        capturedPasteFilesRef.current = dataUrls.flatMap((url, index) => {
+          try {
+            return [fileFromImageDataUrl(url, `pasted-image-${index + 1}`)];
+          } catch {
+            return [];
+          }
+        });
+        return;
+      }
+      if (/<img\b/i.test(html)) {
+        capturedPasteFilesRef.current = [];
+        pendingClipboardReadRef.current = readClipboardImageFiles();
+        return;
+      }
+      const types = Array.from(data.types ?? []);
+      if (types.some(type => type === 'Files' || type.startsWith('image/'))) {
+        capturedPasteFilesRef.current = [];
+        pendingClipboardReadRef.current = readClipboardImageFiles();
+      }
+    };
+    dom.addEventListener('paste', onPasteCapture, true);
+    return () => dom.removeEventListener('paste', onPasteCapture, true);
+  }, [editor]);
+
   useEffect(() => {
     if (!smartMessage) {
       return;
@@ -406,7 +638,7 @@ export function RichTextEditor({
   }, [moreOpen]);
 
   useEffect(() => {
-    if (!linkOpen && !moreOpen) return;
+    if (!linkOpen && !moreOpen && !galleryOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element
         ? event.target
@@ -415,11 +647,13 @@ export function RichTextEditor({
           : null;
       if (!target?.closest('#rich-link-editor, [aria-controls="rich-link-editor"]')) setLinkOpen(false);
       if (!target?.closest('#rich-more-menu, [aria-controls="rich-more-menu"]')) setMoreOpen(false);
+      if (!target?.closest('#note-image-gallery, [aria-controls="note-image-gallery"]')) setGalleryOpen(false);
     };
     const onEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setLinkOpen(false);
       setMoreOpen(false);
+      setGalleryOpen(false);
       if (editor && !editor.isDestroyed) editor.commands.focus();
     };
     document.addEventListener('pointerdown', onPointerDown);
@@ -428,7 +662,7 @@ export function RichTextEditor({
       document.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onEscape);
     };
-  }, [editor, linkOpen, moreOpen]);
+  }, [editor, linkOpen, moreOpen, galleryOpen]);
 
   useEffect(() => {
     setLinkOpen(false);
@@ -450,13 +684,25 @@ export function RichTextEditor({
       return;
     }
 
-    editor.setEditable(format === 'rich');
-    if (format !== 'rich') {
+    // setEditable emits an update by default. During a format or content change
+    // that echo would send the stale document back to the parent and fight the
+    // incoming note, including a just-added image.
+    const editable = format === 'rich';
+    if (editor.isEditable !== editable) {
+      editor.setEditable(editable, false);
+    }
+    if (!editable) {
       return;
     }
 
     const document = parseRichContent(content);
-    if (JSON.stringify(editor.getJSON()) !== serializeRichDocument(document)) {
+    let current = '';
+    try {
+      current = JSON.stringify(editor.getJSON());
+    } catch {
+      return;
+    }
+    if (current !== serializeRichDocument(document)) {
       editor.commands.setContent(document, { emitUpdate: false });
       setToolbarRevision(revision => revision + 1);
     }
@@ -532,69 +778,128 @@ export function RichTextEditor({
     setLinkError('');
   };
 
-  const insertImageFromFile = async (file: File) => {
-    if (formatRef.current !== 'rich' || !editor || editor.isDestroyed) {
-      setSmartMessage('Switch to rich text to embed images.');
+  const reportImageIssue = (message: string) => {
+    setSmartMessage(message);
+    setGalleryError(message);
+  };
+
+  const imageFitsDocument = (
+    document: ReturnType<typeof parseRichContent>,
+    encodedLength: number,
+    backup: string,
+  ) => {
+    const serialized = serializeRichDocument(document);
+    const contentText = richDocumentToContentText(document);
+    const encoder = new TextEncoder();
+    return imageFitsNoteBudget({
+      encodedLength,
+      contentBytes: encoder.encode(serialized).byteLength,
+      contentTextBytes: encoder.encode(contentText).byteLength,
+      richBackupBytes: encoder.encode(backup).byteLength,
+      contentLength: serialized.length,
+      maxTextBytes: MAX_NOTE_TEXT_BYTES,
+      maxContentLength: MAX_NOTE_CONTENT_LENGTH,
+    });
+  };
+
+  const embedFiles = async (files: File[]) => {
+    const supported = files.filter(looksLikeImageFile);
+    if (supported.length === 0) {
+      reportImageIssue('That file is not a supported image.');
       return;
     }
 
-    if (!looksLikeImageFile(file)) {
-      setSmartMessage('That file is not a supported image.');
-      return;
-    }
-
+    setImageBusy(true);
+    setGalleryError('');
+    let blocked = false;
     try {
-      setImageBusy(true);
-      const processed = await processImageFile(file);
-      const document = editor.getJSON();
-      const content = serializeRichDocument(document);
-      const contentText = richDocumentToContentText(document);
-      const backup = richBackupRef.current || '';
-      const encoder = new TextEncoder();
-      const fit = imageFitsNoteBudget({
-        encodedLength: processed.encodedLength,
-        contentBytes: encoder.encode(content).byteLength,
-        contentTextBytes: encoder.encode(contentText).byteLength,
-        richBackupBytes: encoder.encode(backup).byteLength,
-        contentLength: content.length,
-        maxTextBytes: MAX_NOTE_TEXT_BYTES,
-        maxContentLength: MAX_NOTE_CONTENT_LENGTH,
-      });
+      const processed: Array<ProcessedImage & { alt: string }> = [];
+      for (const file of supported) {
+        try {
+          const image = await processImageFile(file);
+          processed.push({ ...image, alt: altTextForImageFile(file) });
+        } catch (error) {
+          blocked = true;
+          reportImageIssue(
+            error instanceof ImageAttachmentError
+              ? error.message
+              : 'Could not embed that image.',
+          );
+        }
+      }
+      if (processed.length === 0) return;
 
-      if (!fit.fits) {
-        setSmartMessage(
-          fit.reason ?? 'This note is already too full to embed another image.',
+      const liveEditor = editorRef.current;
+      const richLive = formatRef.current === 'rich' && liveEditor && !liveEditor.isDestroyed;
+      let added = 0;
+
+      if (!richLive) {
+        const restored = restoreRichContentFromPlain(
+          plainValueRef.current,
+          richBackupRef.current || '',
+          smartFormattingRef.current,
         );
-        return;
+        let document = parseRichContent(restored.content);
+        for (const image of processed) {
+          const fit = imageFitsDocument(document, image.encodedLength, '');
+          if (!fit.fits) {
+            blocked = true;
+            reportImageIssue(fit.reason ?? 'This note is already too full to embed another image.');
+            break;
+          }
+          document = appendImageNode(document, image);
+          added += 1;
+        }
+        if (added === 0) return;
+        onFormatChangeRef.current({
+          content: serializeRichDocument(document),
+          contentText: richDocumentToContentText(document),
+          format: 'rich',
+          richBackup: '',
+        });
+      } else {
+        for (const image of processed) {
+          const document = parseRichContent(JSON.stringify(liveEditor.getJSON()));
+          const fit = imageFitsDocument(document, image.encodedLength, richBackupRef.current || '');
+          if (!fit.fits) {
+            blocked = true;
+            reportImageIssue(fit.reason ?? 'This note is already too full to embed another image.');
+            break;
+          }
+          const inserted = liveEditor
+            .chain()
+            .focus()
+            .setImage({ src: image.dataUrl, alt: image.alt })
+            .run();
+          if (!inserted) {
+            blocked = true;
+            reportImageIssue('Could not embed that image.');
+            break;
+          }
+          added += 1;
+        }
       }
 
-      editor
-        .chain()
-        .focus()
-        .setImage({
-          src: processed.dataUrl,
-          alt: (file as File).name?.replace(/\.[^.]+$/, '') || 'Embedded image',
-        })
-        .run();
-      setSmartMessage('Image embedded');
-    } catch (error) {
-      const message =
-        error instanceof ImageAttachmentError
-          ? error.message
-          : 'Could not embed that image.';
-      setSmartMessage(message);
+      if (added > 0 && !blocked) {
+        setSmartMessage(added === 1 ? 'Image embedded' : `${added} images embedded`);
+        setGalleryError('');
+      }
     } finally {
       setImageBusy(false);
     }
   };
 
-  insertImageFromFileRef.current = insertImageFromFile;
+  embedFilesRef.current = embedFiles;
 
   const openImagePicker = () => {
-    if (formatRef.current !== 'rich' || imageBusy) {
-      return;
-    }
+    if (imageBusy) return;
     imageInputRef.current?.click();
+  };
+
+  const openGallery = () => {
+    setMoreOpen(false);
+    setLinkOpen(false);
+    setGalleryOpen(open => !open);
   };
 
   const switchFormat = (nextFormat: EditorFormat) => {
@@ -625,6 +930,22 @@ export function RichTextEditor({
     setMoreOpen(false);
   };
 
+  const galleryImages: GalleryImage[] = (() => {
+    if (format === 'rich' && editor && !editor.isDestroyed) {
+      try {
+        return imagesInEditor(editor);
+      } catch {
+        return [];
+      }
+    }
+    return embeddedImagesInDocument(parseRichContent(richBackup)).map((image, index) => ({
+      key: `backup-${index}`,
+      pos: null,
+      src: image.src,
+      alt: image.alt,
+    }));
+  })();
+
   return (
     <section
       className="rich-text-editor"
@@ -639,12 +960,13 @@ export function RichTextEditor({
         hidden
         tabIndex={-1}
         aria-hidden="true"
+        multiple
         data-testid="rich-text-image-input"
         onChange={event => {
-          const file = event.target.files?.[0];
+          const files = Array.from(event.target.files ?? []);
           event.target.value = '';
-          if (file) {
-            void insertImageFromFile(file);
+          if (files.length > 0) {
+            void embedFiles(files);
           }
         }}
       />
@@ -653,7 +975,6 @@ export function RichTextEditor({
           className="rich-text-editor__toolbar"
           role="toolbar"
           aria-label="Text formatting"
-          aria-disabled={!richEnabled}
         >
           <div className="rich-text-editor__style-select-wrap">
             <select
@@ -820,9 +1141,14 @@ export function RichTextEditor({
             <Table size={17} aria-hidden="true" />
           </ToolbarButton>
           <ToolbarButton
-            label="Insert image"
-            disabled={!richEnabled || imageBusy}
-            onClick={openImagePicker}
+            label="Images"
+            active={galleryOpen}
+            disabled={imageBusy}
+            className="rich-text-editor__images-tool"
+            ariaHasPopup="dialog"
+            ariaControls="note-image-gallery"
+            ariaExpanded={galleryOpen}
+            onClick={openGallery}
           >
             <ImageIcon size={17} aria-hidden="true" />
           </ToolbarButton>
@@ -956,10 +1282,10 @@ export function RichTextEditor({
                   type="button"
                   role="menuitem"
                   disabled={imageBusy}
-                  onClick={() => runMoreCommand(openImagePicker)}
+                  onClick={() => runMoreCommand(() => setGalleryOpen(true))}
                 >
                   <ImageIcon size={16} aria-hidden="true" />
-                  Insert image
+                  Images
                 </button>
                 <button
                   type="button"
@@ -1137,6 +1463,31 @@ export function RichTextEditor({
             </button>
           </form>
         ) : null}
+
+        {galleryOpen ? (
+          <ImageGallery
+            images={galleryImages}
+            busy={imageBusy}
+            error={galleryError}
+            plainMode={format !== 'rich'}
+            onClose={() => setGalleryOpen(false)}
+            onAdd={openImagePicker}
+            onShow={image => {
+              if (image.pos === null || !editor || editor.isDestroyed || format !== 'rich') {
+                switchFormat('rich');
+                return;
+              }
+              editor.chain().focus().setNodeSelection(image.pos).scrollIntoView().run();
+            }}
+            onRemove={image => {
+              if (image.pos === null || !editor || editor.isDestroyed) return;
+              editor.chain().focus().setNodeSelection(image.pos).deleteSelection().run();
+            }}
+          />
+        ) : null}
+        {format === 'plain' && smartMessage && !galleryOpen ? (
+          <p className="rich-text-editor__image-notice" role="alert">{smartMessage}</p>
+        ) : null}
       </div>
 
       <div className="rich-text-editor__document">
@@ -1156,6 +1507,39 @@ export function RichTextEditor({
             spellCheck
             autoCapitalize="sentences"
             onBlur={() => onBlurRef.current?.()}
+            onPaste={event => {
+              const clipboard = event.clipboardData;
+              const files = imageFilesFromDataTransfer(clipboard);
+              const html = files.length > 0 ? '' : clipboard?.getData('text/html') ?? '';
+              const dataFiles = files.length > 0
+                ? []
+                : imageDataUrlsFromHtml(html).flatMap((url, index) => {
+                  try {
+                    return [fileFromImageDataUrl(url, `pasted-image-${index + 1}`)];
+                  } catch {
+                    return [];
+                  }
+                });
+              const imageFiles = files.length > 0 ? files : dataFiles;
+              if (imageFiles.length > 0) {
+                event.preventDefault();
+                void embedFiles(imageFiles);
+                return;
+              }
+              const types = Array.from(clipboard?.types ?? []);
+              const clipboardClaimsImage = /<img\b/i.test(html)
+                || types.some(type => type === 'Files' || type.startsWith('image/'));
+              if (clipboardClaimsImage) {
+                event.preventDefault();
+                void readClipboardImageFiles().then(clipboardFiles => {
+                  if (clipboardFiles.length > 0) {
+                    void embedFiles(clipboardFiles);
+                    return;
+                  }
+                  reportImageIssue('That paste did not include the image file. Open Images and add it from your photos.');
+                });
+              }
+            }}
             onChange={event => {
               const nextValue = event.target.value;
               setPlainValue(nextValue);

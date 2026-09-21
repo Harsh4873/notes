@@ -36,6 +36,8 @@ export const ACCEPTED_IMAGE_EXTENSIONS = [
   '.gif',
   '.bmp',
   '.avif',
+  '.heic',
+  '.heif',
 ] as const;
 
 // The largest source file we will even attempt to decode. Bigger than this and
@@ -330,4 +332,149 @@ export async function processImageFile(
   } finally {
     decoded.cleanup();
   }
+}
+
+export interface EmbeddedImageInfo {
+  src: string;
+  alt: string;
+}
+
+/** Image nodes already stored in a rich note. Remote URLs are ignored. */
+export function embeddedImagesInDocument(value: unknown): EmbeddedImageInfo[] {
+  const images: EmbeddedImageInfo[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    const record = node as {
+      type?: unknown;
+      attrs?: { src?: unknown; alt?: unknown };
+      content?: unknown;
+    };
+    if (
+      record.type === 'image' &&
+      typeof record.attrs?.src === 'string' &&
+      record.attrs.src.startsWith('data:image/')
+    ) {
+      const alt = typeof record.attrs.alt === 'string' ? record.attrs.alt.trim() : '';
+      images.push({ src: record.attrs.src, alt: alt || 'Embedded image' });
+    }
+    if (Array.isArray(record.content)) {
+      record.content.forEach(walk);
+    }
+  };
+  walk(value);
+  return images;
+}
+
+export function altTextForImageFile(file: { name?: string }): string {
+  const base = (file.name ?? '').replace(/\.[^.]+$/, '').trim();
+  if (!base || /^(image|pasted-image|pasted-image-\d+)$/i.test(base)) {
+    return 'Embedded image';
+  }
+  return base.slice(0, 120);
+}
+
+/**
+ * Copied images often arrive with a short filename, alt string, or source URL
+ * beside the pixels. That text should not block the image insert.
+ */
+export function clipboardTextIsIncidental(text: string): boolean {
+  const trimmed = text.replace(/[\u0000\r]/g, '').trim();
+  if (!trimmed) return true;
+  if (/^https?:\/\/\S+$/i.test(trimmed)) return true;
+  return trimmed.length <= 80 && !trimmed.includes('\n');
+}
+
+interface ClipboardImageSource {
+  files?: ArrayLike<File> | null;
+  items?: ArrayLike<{
+    kind: string;
+    type: string;
+    getAsFile: () => File | null;
+  }> | null;
+}
+
+/**
+ * Read image files from a clipboard or drop payload.
+ *
+ * Call this before `getData`. In Chromium, reading clipboard text clears the
+ * file items, so a later pass sees an empty paste even though an image was copied.
+ */
+export function imageFilesFromDataTransfer(data: ClipboardImageSource | null | undefined): File[] {
+  if (!data) return [];
+  const files: File[] = [];
+  const seen = new Set<string>();
+
+  const push = (file: File | null, fallbackType = '') => {
+    if (!file) return;
+    const type = file.type || fallbackType;
+    let next = file;
+    if (type.startsWith('image/') && file.type !== type) {
+      const extension = type.slice('image/'.length).replace('jpeg', 'jpg') || 'png';
+      next = new File([file], file.name || `pasted-image.${extension}`, {
+        type,
+        lastModified: file.lastModified,
+      });
+    }
+    if (!looksLikeImageFile(next)) return;
+    const key = `${next.name}:${next.size}:${next.type}:${next.lastModified}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(next);
+  };
+
+  for (const file of Array.from(data.files ?? [])) {
+    push(file);
+  }
+
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file' && !item.type.startsWith('image/')) continue;
+    try {
+      push(item.getAsFile(), item.type);
+    } catch {
+      // A clipboard item can throw if it was already consumed.
+    }
+  }
+
+  return files;
+}
+
+const IMAGE_TAG = /<img\b[^>]*>/gi;
+const IMAGE_SRC = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
+
+/** Local `data:image` sources already on the clipboard. Remote URLs are skipped. */
+export function imageDataUrlsFromHtml(html: string): string[] {
+  const urls: string[] = [];
+  for (const tag of html.matchAll(IMAGE_TAG)) {
+    const srcMatch = IMAGE_SRC.exec(tag[0]);
+    const src = (srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? '').trim();
+    if (src.toLowerCase().startsWith('data:image/')) {
+      urls.push(src);
+    }
+  }
+  return urls;
+}
+
+export function fileFromImageDataUrl(dataUrl: string, name = 'pasted-image'): File {
+  const source = dataUrl.trim();
+  if (source.length > MAX_SOURCE_IMAGE_BYTES * 2) {
+    throw new ImageAttachmentError('That image is too large to attach. Try one under 25 MB.');
+  }
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)$/i.exec(source);
+  if (!match) {
+    throw new ImageAttachmentError('That pasted image could not be read.');
+  }
+  const mime = match[1].toLowerCase();
+  let binary: string;
+  try {
+    binary = atob(match[2].replace(/\s/g, ''));
+  } catch {
+    throw new ImageAttachmentError('That pasted image could not be read.');
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  const extension = mime.slice('image/'.length).replace('jpeg', 'jpg') || 'png';
+  const filename = name.includes('.') ? name : `${name}.${extension}`;
+  return new File([bytes], filename, { type: mime });
 }

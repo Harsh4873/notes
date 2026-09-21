@@ -12,7 +12,7 @@ Notes is a private writing workspace at [harsh.bet/notes/](https://harsh.bet/not
 - Real-time Firestore updates, so text pasted on a phone becomes available to copy on a laptop after both devices sync
 - Responsive layouts designed for desktop and mobile use
 
-Notes supports compressed in-note images (paste, drop, or picker) stored as `data:` URLs inside the rich-text body. It intentionally has no general file upload, export/download gallery, JSON import/export, or archive feature. It also does not keep an app-owned IndexedDB or other browser database containing note bodies. Firestore is the note source of truth; the client keeps only temporary in-memory state needed by the open page.
+Notes supports compressed in-note images. Paste an image into the note, drop one onto the page, or open Images to add photos from the device and review pictures already in the note. Adding a photo in a plain-text note switches that note to rich text so the picture can stay with the writing. Each image is stored as a `data:` URL inside the rich-text body. Notes has no separate image host, no general file upload, no export or download gallery, and no JSON import/export or archive. It also does not keep an app-owned IndexedDB or other browser database containing note bodies. Firestore is the note source of truth; the client keeps only temporary in-memory state needed by the open page.
 
 Removing a note moves it to Trash rather than deleting it. A trashed note is flagged, not destroyed: it drops out of Inbox, folders, labels, and live-note search/counts while Trash keeps its own count. It stays recoverable until the owner restores it. The current Notes client has no hard-delete control, automatic emptying, or bulk purge.
 
