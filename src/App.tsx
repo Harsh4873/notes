@@ -694,14 +694,14 @@ function AuthScreen({
         <p className="eyebrow">Private workspace</p>
         <h1 id="auth-title">Your thoughts,<br />right where you left them.</h1>
         <p className="auth-copy">
-          Sign in once on this device. Notes stays private to your verified Google account and syncs quietly everywhere.
+          Sign in with an approved Google account to open your private notes and keep them in sync across devices.
         </p>
         <button className="google-button" type="button" onClick={signIn} disabled={loading || working}>
           <GoogleLogo weight="bold" aria-hidden="true" />
           <span>{loading ? 'Checking your session…' : working ? 'Opening Google…' : 'Continue with Google'}</span>
         </button>
         {error && <p className="auth-error" role="alert">{error}</p>}
-        <p className="auth-note">Each Google account gets a private synced workspace.</p>
+        <p className="auth-note">Access is limited to approved accounts.</p>
       </section>
       <p className="auth-footnote">Capture on your phone. Copy on your laptop. No PIN to remember.</p>
     </main>
