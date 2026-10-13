@@ -152,10 +152,12 @@ describe('clipboard image extraction', () => {
     expect(file.size).toBeGreaterThan(0);
   });
 
-  it('treats short captions and urls as incidental paste text', () => {
+  it('drops filenames and urls beside an image, and keeps a real caption', () => {
     expect(clipboardTextIsIncidental('')).toBe(true);
     expect(clipboardTextIsIncidental('https://example.com/pic.png')).toBe(true);
     expect(clipboardTextIsIncidental('Sunset')).toBe(true);
+    expect(clipboardTextIsIncidental('Screenshot 2024-01-02.png')).toBe(true);
+    expect(clipboardTextIsIncidental('Look at the harbor from the east window.')).toBe(false);
     expect(clipboardTextIsIncidental('A paragraph\nwith a line break')).toBe(false);
   });
 });

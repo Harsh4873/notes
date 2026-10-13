@@ -6,7 +6,7 @@ import {
 } from '../src/owner-vault';
 
 describe('owner vault contract', () => {
-  it('accepts only an active versioned membership with a safe vault id', () => {
+  it('accepts an active or migrating versioned membership with a safe vault id', () => {
     expect(parseOwnerVaultMembership({
       vaultId: 'vault_1234567890',
       schemaVersion: 1,
@@ -16,6 +16,11 @@ describe('owner vault contract', () => {
       vaultId: 'vault_1234567890',
       schemaVersion: 1,
       status: 'migrating',
+    })).toEqual({ vaultId: 'vault_1234567890', schemaVersion: 1, status: 'migrating' });
+    expect(parseOwnerVaultMembership({
+      vaultId: 'vault_1234567890',
+      schemaVersion: 1,
+      status: 'revoked',
     })).toBeNull();
     expect(parseOwnerVaultMembership({
       vaultId: '../private',

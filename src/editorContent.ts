@@ -633,6 +633,31 @@ export const richDocumentToPlainText = (document: RichTextDocument): string =>
 export const richContentToPlainText = (content: string): string =>
   richDocumentToPlainText(parseRichContent(content));
 
+const imageAccessibleName = (node: RichTextNode): string => {
+  const alt = typeof node.attrs?.alt === 'string' ? node.attrs.alt.trim() : '';
+  if (alt) return alt;
+  const title = typeof node.attrs?.title === 'string' ? node.attrs.title.trim() : '';
+  if (title) return title;
+  return 'Image';
+};
+
+const collectImageNames = (node: RichTextNode): string[] => {
+  if (node.type === 'image') return [imageAccessibleName(node)];
+  return (node.content ?? []).flatMap(collectImageNames);
+};
+
+/** Copy text includes picture names. Plain-mode round trip still omits embeds. */
+export const richDocumentToClipboardText = (document: RichTextDocument): string => {
+  const plain = richDocumentToPlainText(document);
+  const images = collectImageNames(document);
+  if (images.length === 0) return plain;
+  const imageText = images.join('\n');
+  return plain ? `${plain}\n\n${imageText}` : imageText;
+};
+
+export const richContentToClipboardText = (content: string): string =>
+  richDocumentToClipboardText(parseRichContent(content));
+
 const collectReadableText = (node: RichTextNode): string => {
   if (node.type === 'text') {
     return node.text ?? '';
@@ -644,7 +669,7 @@ const collectReadableText = (node: RichTextNode): string => {
     return '';
   }
   if (node.type === 'image') {
-    return '';
+    return imageAccessibleName(node);
   }
   if (node.type === 'table') {
     return (node.content ?? []).map(collectReadableText).join('\n');

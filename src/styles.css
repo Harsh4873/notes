@@ -559,7 +559,7 @@ kbd {
   background: transparent;
 }
 
-.sync-pill:hover {
+button.sync-pill:hover {
   background: var(--surface-muted);
 }
 
@@ -3121,10 +3121,6 @@ button.rich-text-editor__smart:hover {
 }
 
 @media (max-width: 520px) {
-  /* Quote, code, code block and divider all live in the More menu, so hiding
-     them here loses nothing. Highlight and text colour do not, so only their
-     colour swatches fold away and the toggles themselves stay reachable. */
-  .rich-text-editor__swatch,
   .rich-text-editor__tool--advanced {
     display: none;
   }
@@ -3730,7 +3726,7 @@ select:focus-visible {
   padding: 2px 5px;
   border-radius: 999px;
   background: color-mix(in srgb, currentColor 10%, transparent);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4119,7 +4115,10 @@ select:focus-visible {
 }
 
 .auth-page {
-  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  align-items: flex-start;
   overflow: auto;
   background:
     radial-gradient(circle at 16% 18%, color-mix(in srgb, var(--accent-soft) 72%, transparent), transparent 31%),
@@ -4128,6 +4127,9 @@ select:focus-visible {
 }
 
 .auth-panel {
+  margin-top: auto;
+  margin-bottom: auto;
+  flex-shrink: 0;
   border-radius: 20px;
   box-shadow: var(--shadow-soft);
 }
@@ -4648,7 +4650,9 @@ select:focus-visible {
   }
 
   .rich-text-editor__smart {
-    display: none;
+    flex: 0 0 auto;
+    min-width: 36px;
+    min-height: 36px;
   }
 
   .rich-text-editor__mode-switch {
@@ -4687,8 +4691,8 @@ select:focus-visible {
   }
 
   .rich-text-editor__link-popover {
-    position: fixed;
-    top: calc(66px + env(safe-area-inset-top));
+    position: absolute;
+    top: 66px;
     right: 10px;
     left: 10px;
     width: auto;
@@ -4796,10 +4800,6 @@ select:focus-visible {
 
   .rich-text-editor__style-select-wrap {
     flex-basis: 96px;
-  }
-
-  .rich-text-editor__swatch {
-    display: none;
   }
 
   .rich-text-editor__mode-switch button {
@@ -5099,8 +5099,11 @@ select:focus-visible {
   grid-column: 1 / -1;
   flex: 1 0 100%;
   gap: 10px;
+  max-height: min(40dvh, 320px);
+  min-height: 0;
   margin-top: 4px;
   padding: 12px;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-strong);
@@ -5161,14 +5164,20 @@ select:focus-visible {
 }
 
 .image-gallery__error,
-.rich-text-editor__image-notice {
+.rich-text-editor__image-notice,
+.rich-text-editor__smart-status {
   margin: 0;
   color: var(--danger);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.rich-text-editor__image-notice {
+.rich-text-editor__smart-status {
+  color: var(--ink-soft);
+}
+
+.rich-text-editor__image-notice,
+.rich-text-editor__smart-status {
   flex: 1 0 100%;
   grid-column: 1 / -1;
 }
@@ -5259,11 +5268,15 @@ select:focus-visible {
 }
 
 .rich-text-editor__prose:focus,
-.rich-text-editor__prose:focus-visible,
-.rich-text-editor__surface--plain textarea:focus,
-.rich-text-editor__surface--plain textarea:focus-visible {
+.rich-text-editor__surface--plain textarea:focus {
   outline: none;
   box-shadow: none;
+}
+
+.rich-text-editor__prose:focus-visible,
+.rich-text-editor__surface--plain textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 /* Body-first writing and note names outside the document. */
@@ -5370,14 +5383,6 @@ select:focus-visible {
   margin-top: 8px;
 }
 
-.is-focused .rich-text-editor__chrome {
-  display: none;
-}
-
-.is-focused .rich-text-editor__document {
-  padding-top: 32px;
-}
-
 .rename-modal > p {
   margin: 12px 0 0;
   color: var(--ink-soft);
@@ -5419,4 +5424,58 @@ select:focus-visible {
   .note-row-actions { opacity: 1; }
   .note-preview { padding-right: 80px; }
   .note-row-footer { padding-right: 88px; }
+}
+
+/* Later sheets set type smaller than 16px. On iPhone that zooms the page
+   and, with body overflow hidden, never zooms back. Landscape phones are
+   wider than 820px, so touch screens keep 16px even when the layout is not
+   the phone shell. */
+@media (max-width: 820px), ((hover: none) and (pointer: coarse)) {
+  .search-field input,
+  .label-popover input,
+  .folder-modal input,
+  .quick-capture-modal textarea,
+  .rich-text-editor__link-popover input,
+  .rich-text-editor__style-select,
+  .rich-text-editor__surface--plain textarea,
+  .note-folder-field select,
+  .rich-text-editor__swatch input {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 820px) {
+  .copy-note-button {
+    display: inline-flex;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+  }
+
+  .sync-error-banner {
+    top: calc(var(--topbar-height) + env(safe-area-inset-top) + 8px);
+    right: 12px;
+    left: 12px;
+    max-width: none;
+  }
+
+  .mobile-pane-editor .sync-error-banner {
+    top: calc(env(safe-area-inset-top) + 66px);
+    z-index: 120;
+  }
+}
+
+@media (max-width: 560px) {
+  .auth-page {
+    align-items: flex-start;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: auto;
+  }
+}
+
+.note-row.is-selected time,
+.note-row.is-selected .note-row-footer {
+  color: var(--ink-soft);
 }

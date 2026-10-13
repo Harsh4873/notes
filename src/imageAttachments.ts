@@ -374,14 +374,18 @@ export function altTextForImageFile(file: { name?: string }): string {
 }
 
 /**
- * Copied images often arrive with a short filename, alt string, or source URL
- * beside the pixels. That text should not block the image insert.
+ * Copied images often arrive with a filename, a one-word label, or a source
+ * URL beside the pixels. A real caption is part of the note.
  */
 export function clipboardTextIsIncidental(text: string): boolean {
   const trimmed = text.replace(/[\u0000\r]/g, '').trim();
   if (!trimmed) return true;
   if (/^https?:\/\/\S+$/i.test(trimmed)) return true;
-  return trimmed.length <= 80 && !trimmed.includes('\n');
+  if (trimmed.includes('\n')) return false;
+  if (/\.(?:png|jpe?g|gif|webp|heic|bmp|svg|avif)$/i.test(trimmed) && trimmed.length <= 120) {
+    return true;
+  }
+  return trimmed.length <= 80 && !/\s/.test(trimmed);
 }
 
 interface ClipboardImageSource {

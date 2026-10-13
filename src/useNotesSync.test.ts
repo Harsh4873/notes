@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { getRedirectResult, signInWithPopup, signInWithRedirect } from 'firebase/auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNotesSync } from './useNotesSync';
 
@@ -43,6 +44,8 @@ vi.mock('firebase/auth', () => ({
     return () => undefined;
   },
   signInWithPopup: vi.fn(async () => ({ user: null })),
+  signInWithRedirect: vi.fn(async () => undefined),
+  getRedirectResult: vi.fn(async () => null),
   signOut: harness.signOut,
 }));
 
@@ -369,5 +372,61 @@ describe('write failures', () => {
 
     await waitFor(() => expect(result.current.syncStatus).toBe('synced'));
     expect(result.current.error).toBeUndefined();
+  });
+});
+
+describe('google sign-in', () => {
+  it('opens a popup in a normal browser', async () => {
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+    await act(async () => {
+      await view.result.current.signIn();
+    });
+    expect(signInWithPopup).toHaveBeenCalledTimes(1);
+    expect(signInWithRedirect).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a redirect when the popup is blocked', async () => {
+    vi.mocked(signInWithPopup).mockRejectedValueOnce(
+      Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' }),
+    );
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+    await act(async () => {
+      await view.result.current.signIn();
+    });
+    expect(signInWithRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a redirect on iPhone instead of a popup', async () => {
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+    const agent = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)',
+    });
+    try {
+      await act(async () => {
+        await view.result.current.signIn();
+      });
+      expect(signInWithRedirect).toHaveBeenCalledTimes(1);
+      expect(signInWithPopup).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(navigator, 'userAgent', { configurable: true, value: agent });
+    }
+  });
+
+  it('keeps a failed redirect on the sign-in screen', async () => {
+    vi.mocked(getRedirectResult).mockRejectedValueOnce(
+      Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' }),
+    );
+    const view = renderHook(() => useNotesSync());
+    await waitFor(() => expect(harness.authListeners.length).toBeGreaterThan(0));
+    emitAuth(null);
+    await waitFor(() => {
+      expect(view.result.current.error).toBe('Allow the Google sign-in window, then try again.');
+    });
+    expect(view.result.current.authStatus).toBe('signed-out');
   });
 });

@@ -191,6 +191,50 @@ describe('RichTextEditor images', () => {
     expect(onChange).toHaveBeenCalled();
   });
 
+  it('keeps a real caption pasted beside an image', async () => {
+    const onChange = vi.fn();
+    const caption = 'Look at the harbor from the east window.';
+    const dataUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    vi.spyOn(imageAttachments, 'processImageFile').mockResolvedValue({
+      dataUrl,
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      encodedLength: dataUrl.length,
+    });
+
+    const { container } = render(
+      <RichTextEditor
+        noteId="caption-paste"
+        format="rich"
+        content={emptyRich}
+        onChange={onChange}
+        onFormatChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('.ProseMirror')).toBeTruthy();
+    });
+    const editor = container.querySelector('.ProseMirror') as HTMLElement;
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+        getData: (type: string) => (type === 'text/plain' ? caption : ''),
+        types: ['Files', 'text/plain'],
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector('img[src^="data:image"]')).toBeTruthy();
+    });
+    expect(container).toHaveTextContent(caption);
+    expect(container).not.toHaveTextContent('shot.png');
+  });
+
   it('embeds a pasted data-url image and refuses a remote image hotlink', async () => {
     const onChange = vi.fn();
     const dataUrl =
@@ -291,6 +335,49 @@ describe('RichTextEditor images', () => {
     expect(next.format).toBe('rich');
     expect(next.content).toContain('data:image/png;base64');
     expect(next.content).toContain('Keep this thought.');
+  });
+
+  it('keeps a caption when a plain note pastes an image', async () => {
+    const onFormatChange = vi.fn();
+    const caption = 'Look at the harbor from the east window.';
+    const dataUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    vi.spyOn(imageAttachments, 'processImageFile').mockResolvedValue({
+      dataUrl,
+      mimeType: 'image/png',
+      width: 1,
+      height: 1,
+      encodedLength: dataUrl.length,
+    });
+
+    const { container } = render(
+      <RichTextEditor
+        noteId="plain-caption"
+        format="plain"
+        content="Keep this thought."
+        onChange={vi.fn()}
+        onFormatChange={onFormatChange}
+      />,
+    );
+
+    const textbox = within(container).getByRole('textbox', { name: 'Plain text note' });
+    const file = new File([new Uint8Array([8, 8])], 'clip.png', { type: 'image/png' });
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [file],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? caption : ''),
+        types: ['Files', 'text/plain'],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onFormatChange).toHaveBeenCalled();
+    });
+    const next = onFormatChange.mock.calls.at(-1)?.[0];
+    expect(next.content).toContain('Keep this thought.');
+    expect(next.content.indexOf('Keep this thought.')).toBeLessThan(next.content.indexOf(caption));
+    expect(next.content.indexOf(caption)).toBeLessThan(next.content.indexOf('data:image/png;base64'));
   });
 
   it('shows an empty gallery, then the image added from photos', async () => {

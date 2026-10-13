@@ -44,7 +44,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { richContentToPlainText } from './editorContent';
+import { richContentToClipboardText, richContentToContentText } from './editorContent';
 import { ErrorBoundary } from './ErrorBoundary';
 import type { EditorChange } from './RichTextEditor';
 import type { FolderRecord, NoteRecord, NotesSettings, ThemePreference } from './types';
@@ -154,6 +154,20 @@ function cleanPreview(value: string) {
   return text || 'Start writing…';
 }
 
+const readableTextCache = new Map<string, string>();
+
+function noteReadableText(note: Pick<NoteRecord, 'format' | 'content' | 'contentText'>): string {
+  if (note.format !== 'rich' || !/"type"\s*:\s*"image"/.test(note.content)) {
+    return note.contentText;
+  }
+  const cached = readableTextCache.get(note.content);
+  if (cached !== undefined) return cached;
+  const text = richContentToContentText(note.content);
+  if (readableTextCache.size > 40) readableTextCache.clear();
+  readableTextCache.set(note.content, text);
+  return text;
+}
+
 function noteTitleFromText(value: string) {
   const firstMeaningfulLine = value
     .split(/\r?\n/)
@@ -171,6 +185,13 @@ function noteTitleFromText(value: string) {
   return firstMeaningfulLine.length > 72
     ? `${firstMeaningfulLine.slice(0, 69).trim()}…`
     : firstMeaningfulLine;
+}
+
+function shortcutHint(keys: string) {
+  const apple = typeof navigator !== 'undefined'
+    && /Mac|iPhone|iPad|iPod/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
+  if (apple) return keys;
+  return keys.replaceAll('⌘⇧', 'Ctrl+Shift+').replaceAll('⌘', 'Ctrl+');
 }
 
 function labelColor(label: string) {
@@ -476,7 +497,8 @@ function SwipeableNoteRow({
     }
   };
 
-  const title = note.title || noteTitleFromText(note.contentText);
+  const readable = noteReadableText(note);
+  const title = note.title || noteTitleFromText(readable);
   const busy = actionPending;
 
   return (
@@ -530,7 +552,7 @@ function SwipeableNoteRow({
             <strong>{title}</strong>
             {note.pinned && <PushPin weight="fill" aria-label="Pinned" />}
           </span>
-          <span className="note-preview">{cleanPreview(note.contentText)}</span>
+          <span className="note-preview">{cleanPreview(readable)}</span>
           <span className="note-row-footer">
             <time>{displayDate(note.updatedAt)}</time>
             {folderName !== 'Inbox' && <span className="note-row-folder">{folderName}</span>}
@@ -741,6 +763,7 @@ export function App() {
   const [toast, setToast] = useState<ToastState>();
   const [conflictReviewOpen, setConflictReviewOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const creatingRef = useRef(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, Partial<NoteRecord>>>({});
   const [saveRevision, setSaveRevision] = useState(0);
   const [localSaveError, setLocalSaveError] = useState<string>();
@@ -860,7 +883,7 @@ export function App() {
         if (formatFilter !== 'all' && note.format !== formatFilter) return false;
         if (searchTerms.length > 0) {
           const folderName = folders.find((folder) => folder.id === note.folderId)?.name ?? '';
-          const searchableText = [note.title, note.contentText, folderName, ...note.labels]
+          const searchableText = [note.title, noteReadableText(note), folderName, ...note.labels]
             .join('\n')
             .toLocaleLowerCase();
           return searchTerms.every((term) => searchableText.includes(term));
@@ -875,8 +898,8 @@ export function App() {
       .sort((left, right) => {
         if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
         if (noteSort === 'oldest') return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
-        if (noteSort === 'title') return (left.title || noteTitleFromText(left.contentText)).localeCompare(
-          right.title || noteTitleFromText(right.contentText), undefined, { sensitivity: 'base', numeric: true },
+        if (noteSort === 'title') return (left.title || noteTitleFromText(noteReadableText(left))).localeCompare(
+          right.title || noteTitleFromText(noteReadableText(right)), undefined, { sensitivity: 'base', numeric: true },
         );
         return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
       });
@@ -1198,10 +1221,13 @@ export function App() {
   }, [cloudNotes, saveRevision]);
 
   useEffect(() => {
-    document.title = sync.authStatus === 'signed-in' && activeNote
-      ? `${activeNote.title || noteTitleFromText(activeNote.contentText)} — Notes`
+    const activeTitle = activeNote
+      ? (activeNote.title || noteTitleFromText(noteReadableText(activeNote)))
+      : '';
+    document.title = sync.authStatus === 'signed-in' && activeTitle
+      ? `${activeTitle} - Notes`
       : 'Notes';
-  }, [activeNote?.id, activeNote?.title, activeNote?.contentText, sync.authStatus]);
+  }, [activeNote, sync.authStatus]);
 
   useEffect(() => {
     writeWorkspaceLayout({ listCollapsed, sidebarCollapsed });
@@ -1213,7 +1239,7 @@ export function App() {
     const updateThemeColor = () => {
       const dark = settings.theme === 'dark' || (settings.theme === 'system' && colorScheme.matches);
       document.querySelector('meta[name="theme-color"]')
-        ?.setAttribute('content', dark ? '#171814' : '#f7f3ec');
+        ?.setAttribute('content', dark ? '#161713' : '#e9e2d8');
     };
     updateThemeColor();
     if (settings.theme === 'system') colorScheme.addEventListener('change', updateThemeColor);
@@ -1401,7 +1427,7 @@ export function App() {
 
   const beginRename = (note: NoteRecord) => {
     setRenameNoteId(note.id);
-    setRenameDraft(note.title || noteTitleFromText(note.contentText));
+    setRenameDraft(note.title || noteTitleFromText(noteReadableText(note)));
     setNoteDetailsOpen(false);
   };
 
@@ -1420,19 +1446,20 @@ export function App() {
   };
 
   const duplicateNote = async (note: NoteRecord) => {
-    if (creating) return;
+    if (creatingRef.current) return;
     if (sync.syncStatus === 'offline' || !navigator.onLine) {
       showToast('Reconnect before duplicating a note');
       return;
     }
     const generation = workspaceGenerationRef.current;
+    creatingRef.current = true;
     setCreating(true);
     setNoteDetailsOpen(false);
     try {
       const id = await sync.createNote({
-        title: `${note.title || noteTitleFromText(note.contentText)} (copy)`.slice(0, 240),
+        title: `${note.title || noteTitleFromText(noteReadableText(note))} (copy)`.slice(0, 240),
         content: note.content,
-        contentText: note.contentText,
+        contentText: noteReadableText(note),
         richBackup: note.richBackup,
         format: note.format,
         folderId: note.folderId,
@@ -1452,12 +1479,13 @@ export function App() {
     } catch {
       if (workspaceGenerationRef.current === generation) showToast('Could not duplicate the note');
     } finally {
+      creatingRef.current = false;
       if (workspaceGenerationRef.current === generation) setCreating(false);
     }
   };
 
   async function createNewNote() {
-    if (creating) return;
+    if (creatingRef.current) return;
     if (sync.syncStatus === 'offline' || !navigator.onLine) {
       showToast('Reconnect before creating a note — offline drafts are intentionally not stored here');
       return;
@@ -1465,6 +1493,7 @@ export function App() {
     clearPendingCreatedNote();
     autoTitleNoteIdRef.current = undefined;
     const generation = workspaceGenerationRef.current;
+    creatingRef.current = true;
     setCreating(true);
     try {
       const folderId = view.startsWith('folder:') ? view.slice(7) : 'inbox';
@@ -1491,6 +1520,7 @@ export function App() {
     } catch {
       if (workspaceGenerationRef.current === generation) showToast('Could not create the note');
     } finally {
+      creatingRef.current = false;
       if (workspaceGenerationRef.current === generation) setCreating(false);
     }
   }
@@ -1498,7 +1528,7 @@ export function App() {
   const submitQuickCapture = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const text = quickText.trim();
-    if (!text || creating) return;
+    if (!text || creatingRef.current) return;
     if (sync.syncStatus === 'offline' || !navigator.onLine) {
       showToast('Reconnect to capture this note safely');
       return;
@@ -1506,6 +1536,7 @@ export function App() {
     clearPendingCreatedNote();
     autoTitleNoteIdRef.current = undefined;
     const generation = workspaceGenerationRef.current;
+    creatingRef.current = true;
     setCreating(true);
     try {
       const id = await sync.createNote({
@@ -1531,6 +1562,7 @@ export function App() {
     } catch {
       if (workspaceGenerationRef.current === generation) showToast('Could not capture that note');
     } finally {
+      creatingRef.current = false;
       if (workspaceGenerationRef.current === generation) setCreating(false);
     }
   };
@@ -1554,10 +1586,15 @@ export function App() {
 
   const copyNote = async (note: NoteRecord) => {
     const generation = workspaceGenerationRef.current;
-    const body = note.format === 'rich' ? richContentToPlainText(note.content) : note.content;
-    const value = body;
+    const body = note.format === 'rich' || (!note.content.trim() && note.richBackup.trim())
+      ? richContentToClipboardText(note.format === 'rich' ? note.content : note.richBackup)
+      : note.content;
+    if (!body.trim()) {
+      if (workspaceGenerationRef.current === generation) showToast('Nothing to copy');
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(body);
       if (workspaceGenerationRef.current === generation) showToast('Copied to clipboard');
     } catch {
       if (workspaceGenerationRef.current === generation) showToast('Clipboard permission is blocked');
@@ -1823,7 +1860,7 @@ export function App() {
             <X aria-hidden="true" />
           </button>
           <span className="wordmark">Notes</span>
-          <button className="compose-button" type="button" onClick={() => void createNewNote()} aria-label="Create a new note" title="New note (⌘N)">
+          <button className="compose-button" type="button" onClick={() => void createNewNote()} aria-label="Create a new note" title={shortcutHint('New note (⌘N)')}>
             <NotePencil aria-hidden="true" />
           </button>
         </div>
@@ -1878,7 +1915,7 @@ export function App() {
         <button className="quick-capture-button" type="button" onClick={() => setQuickCaptureOpen(true)}>
           <span className="quick-capture-icon"><Lightning weight="fill" aria-hidden="true" /></span>
           <span><strong>Quick capture</strong><small>Paste or type instantly</small></span>
-          <kbd>⌘⇧C</kbd>
+          <kbd>{shortcutHint('⌘⇧C')}</kbd>
         </button>
       </aside>
 
@@ -1932,7 +1969,7 @@ export function App() {
           />
           {search ? (
             <button type="button" onClick={() => setSearch('')} aria-label="Clear search"><X aria-hidden="true" /></button>
-          ) : <kbd>⌘K</kbd>}
+          ) : <kbd>{shortcutHint('⌘K')}</kbd>}
         </label>
 
         <button className="topbar-capture-button" type="button" onClick={() => void createNewNote()}>
@@ -1940,18 +1977,27 @@ export function App() {
           <span>New note</span>
         </button>
 
-        <button
-          className={`sync-pill sync-${effectiveSyncStatus}`}
-          type="button"
-          title={visibleSyncError || syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}
-          aria-label={visibleSyncError ? `${visibleSyncError} Retry syncing.` : syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}
-          onClick={() => {
-            if (visibleSyncError) void retrySaving();
-          }}
-        >
-          <SyncIcon status={effectiveSyncStatus} />
-          <span>{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
-        </button>
+        {visibleSyncError ? (
+          <button
+            className={`sync-pill sync-${effectiveSyncStatus}`}
+            type="button"
+            title={visibleSyncError}
+            aria-label={`${visibleSyncError} Retry syncing.`}
+            onClick={() => void retrySaving()}
+          >
+            <SyncIcon status={effectiveSyncStatus} />
+            <span>{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
+          </button>
+        ) : (
+          <span
+            className={`sync-pill sync-${effectiveSyncStatus}`}
+            role="status"
+            title={syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}
+          >
+            <SyncIcon status={effectiveSyncStatus} />
+            <span>{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
+          </span>
+        )}
         <span className="topbar-divider" />
         <div className="theme-wrap" ref={themeWrapRef}>
           <button
@@ -1981,7 +2027,7 @@ export function App() {
         </div>
         <span className="topbar-divider" />
         <div className="profile-wrap" ref={profileWrapRef}>
-          <button className="profile-button" type="button" onClick={() => setProfileOpen((open) => !open)} aria-haspopup="dialog" aria-controls="profile-menu" aria-expanded={profileOpen}>
+          <button className="profile-button" type="button" onClick={() => setProfileOpen((open) => !open)} aria-haspopup="dialog" aria-controls="profile-menu" aria-expanded={profileOpen} aria-label={`Account, ${sync.user.displayName?.trim() || sync.user.email || 'signed in'}`}>
             <span>{initials(sync.user)}</span><CaretDown aria-hidden="true" />
           </button>
           {profileOpen && (
@@ -1998,7 +2044,7 @@ export function App() {
       </header>
 
       {visibleSyncError && (
-        <div className="sync-error-banner" role="alert" aria-hidden={mobileChromeHidden ? 'true' : undefined} inert={mobileChromeHidden}>
+        <div className="sync-error-banner" role="alert">
           <WarningCircle aria-hidden="true" />
           <span>{visibleSyncError}</span>
           <div className="sync-error-actions">
@@ -2083,7 +2129,7 @@ export function App() {
           </div>
         </header>
 
-        <div className="note-list" role="list">
+        <div className="note-list">
           {!sync.notesReady ? (
             <div className="note-list-loading" role="status" aria-label="Loading notes">
               <span>Gathering your notes…</span>
@@ -2094,7 +2140,9 @@ export function App() {
               {showPinnedSection && (
                 <section className="note-list-section" aria-labelledby="pinned-notes-heading">
                   <h3 id="pinned-notes-heading"><PushPin weight="fill" aria-hidden="true" />Pinned</h3>
-                  {visiblePinnedNotes.map(renderNoteRow)}
+                  <div role="list">
+                    {visiblePinnedNotes.map(renderNoteRow)}
+                  </div>
                 </section>
               )}
               {visibleRegularNotes.length > 0 && (
@@ -2103,7 +2151,9 @@ export function App() {
                   aria-labelledby={showPinnedSection ? 'regular-notes-heading' : undefined}
                 >
                   {showPinnedSection && <h3 id="regular-notes-heading">Notes</h3>}
-                  {visibleRegularNotes.map(renderNoteRow)}
+                  <div role="list">
+                    {visibleRegularNotes.map(renderNoteRow)}
+                  </div>
                 </section>
               )}
             </>
@@ -2148,7 +2198,7 @@ export function App() {
                   setMobilePane('notes');
                 }} aria-label="Back to note list"><ArrowLeft aria-hidden="true" /></button>
                 <button className="editor-note-name" type="button" onClick={() => beginRename(activeNote)} disabled={activeNoteTrashed} title="Rename note">
-                  <span>{activeNote.title || noteTitleFromText(activeNote.contentText)}</span>
+                  <span>{activeNote.title || noteTitleFromText(noteReadableText(activeNote))}</span>
                   {!activeNoteTrashed && <PencilSimple aria-hidden="true" />}
                 </button>
                 <div className="folder-picker-wrap" ref={folderPickerRef}>
@@ -2173,7 +2223,7 @@ export function App() {
               </div>
               <div className="editor-actions">
                 {!isMobileLayout && (
-                  <button className={`icon-button focus-button ${focusMode ? 'is-active' : ''}`} type="button" onClick={toggleFocusMode} aria-label={focusMode ? 'Exit focus mode' : 'Focus mode'} aria-pressed={focusMode} title="Focus mode (⌘⇧F)">
+                  <button className={`icon-button focus-button ${focusMode ? 'is-active' : ''}`} type="button" onClick={toggleFocusMode} aria-label={focusMode ? 'Exit focus mode' : 'Focus mode'} aria-pressed={focusMode} title={shortcutHint('Focus mode (⌘⇧F)')}>
                     {focusMode ? <CornersIn aria-hidden="true" /> : <CornersOut aria-hidden="true" />}
                   </button>
                 )}
@@ -2226,7 +2276,7 @@ export function App() {
                       <p><span>Format</span><strong>{activeNote.format === 'rich' ? 'Rich text' : 'Plain text'}</strong></p>
                       <p><span>Created</span><strong>{displayDate(activeNote.createdAt)}</strong></p>
                       <p><span>Updated</span><strong>{displayDate(activeNote.updatedAt)}</strong></p>
-                      <p><span>Characters</span><strong>{activeNote.contentText.length.toLocaleString()}</strong></p>
+                      <p><span>Characters</span><strong>{noteReadableText(activeNote).length.toLocaleString()}</strong></p>
                       <div className="popover-divider" />
                       <button className="note-details-action" type="button" onClick={() => { void copyNote(activeNote); setNoteDetailsOpen(false); }}><Copy aria-hidden="true" />Copy body</button>
                       {!activeNoteTrashed && (
@@ -2305,7 +2355,7 @@ export function App() {
                     richBackup={activeNote.richBackup}
                     footerSlot={(
                       <footer className="editor-footer">
-                        <span>{activeNote.contentText.trim() ? `${activeNote.contentText.trim().split(/\s+/).length} words` : '0 words'}</span>
+                        <span>{noteReadableText(activeNote).trim() ? `${noteReadableText(activeNote).trim().split(/\s+/).length} words` : '0 words'}</span>
                         <span className={`inline-sync sync-${effectiveSyncStatus}`}><SyncIcon status={effectiveSyncStatus} />{syncLabel(effectiveSyncStatus, sync.lastSyncedAt)}</span>
                       </footer>
                     )}
@@ -2381,6 +2431,7 @@ export function App() {
               value={quickText}
               onChange={(event) => setQuickText(event.target.value)}
               placeholder={'Paste or type anything…'}
+              aria-label="Quick capture"
               rows={10}
             />
             <footer>

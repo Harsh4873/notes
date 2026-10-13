@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   onAuthStateChanged,
+  getRedirectResult,
   signInWithPopup,
+  signInWithRedirect,
   signOut as firebaseSignOut,
   type IdTokenResult,
   type User,
@@ -89,6 +91,26 @@ function browserIsOnline() {
   return typeof navigator === 'undefined' || navigator.onLine;
 }
 
+/** Popup sign-in is dropped by mobile Safari, in-app browsers, and installed apps. */
+function prefersRedirectSignIn() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  if ((navigator as Navigator & { standalone?: boolean }).standalone === true) return true;
+  if (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches) {
+    return true;
+  }
+  const agent = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod/i.test(agent)) return true;
+  // iPadOS Safari reports itself as a Mac, but it still drops the Google popup.
+  if (/Macintosh/i.test(agent) && navigator.maxTouchPoints > 1) return true;
+  if (/Android/i.test(agent) && /; wv\)|Instagram|FBAN|FBAV|Line\//i.test(agent)) return true;
+  return false;
+}
+
+function shouldRetrySignInWithRedirect(error: unknown) {
+  const code = errorCode(error);
+  return code.includes('popup-blocked') || code.includes('operation-not-supported');
+}
+
 function errorCode(error: unknown) {
   return typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
 }
@@ -98,8 +120,12 @@ export function friendlyNotesError(error: unknown): string {
   if (code.includes('notes/revision-conflict')) {
     return 'This note changed on another device. Review the latest cloud version, then choose which edit to keep.';
   }
-  if (code.includes('popup-closed-by-user')) return 'Sign-in was cancelled.';
-  if (code.includes('popup-blocked')) return 'Allow the Google sign-in window, then try again.';
+  if (code.includes('popup-closed-by-user') || code.includes('redirect-cancelled-by-user')) {
+    return 'Sign-in was cancelled.';
+  }
+  if (code.includes('popup-blocked') || code.includes('operation-not-supported')) {
+    return 'Allow the Google sign-in window, then try again.';
+  }
   if (code.includes('network-request-failed') || code.includes('unavailable') || !browserIsOnline()) {
     return 'You are offline. Notes will reconnect and sync automatically.';
   }
@@ -505,7 +531,15 @@ export function useNotesSync(): NotesSyncApi {
       });
     }
 
-    void authPersistenceReady.then(registerAuthListener).catch((persistenceError) => {
+    void authPersistenceReady.then(async () => {
+      if (disposed) return;
+      try {
+        await getRedirectResult(firebaseAuth);
+      } catch (redirectError) {
+        if (!disposed) rejectedAccountMessage = friendlyNotesError(redirectError);
+      }
+      registerAuthListener();
+    }).catch((persistenceError) => {
       if (disposed) return;
       setError(`Notes could not remember this browser yet. ${friendlyNotesError(persistenceError)}`);
       registerAuthListener();
@@ -547,7 +581,16 @@ export function useNotesSync(): NotesSyncApi {
     setSyncStatus('syncing');
     try {
       await authPersistenceReady;
-      await signInWithPopup(firebaseAuth, googleProvider);
+      if (prefersRedirectSignIn()) {
+        await signInWithRedirect(firebaseAuth, googleProvider);
+        return;
+      }
+      try {
+        await signInWithPopup(firebaseAuth, googleProvider);
+      } catch (popupError) {
+        if (!shouldRetrySignInWithRedirect(popupError)) throw popupError;
+        await signInWithRedirect(firebaseAuth, googleProvider);
+      }
     } catch (signInError) {
       setAuthStatus(firebaseAuth.currentUser ? 'signed-in' : 'signed-out');
       setError(friendlyNotesError(signInError));

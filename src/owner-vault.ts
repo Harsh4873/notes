@@ -7,7 +7,7 @@ export const OWNER_VAULT_SCHEMA_VERSION = 1;
 export interface OwnerVaultMembership {
   vaultId: string;
   schemaVersion: 1;
-  status: 'active';
+  status: 'active' | 'migrating';
 }
 
 export class OwnerVaultAccessError extends Error {
@@ -21,14 +21,17 @@ export function parseOwnerVaultMembership(value: unknown): OwnerVaultMembership 
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Record<string, unknown>;
   if (candidate.schemaVersion !== OWNER_VAULT_SCHEMA_VERSION) return null;
-  if (candidate.status !== 'active') return null;
+  const status = candidate.status === 'active' || candidate.status === 'migrating'
+    ? candidate.status
+    : null;
+  if (!status) return null;
   if (typeof candidate.vaultId !== 'string' || !/^[A-Za-z0-9_-]{12,128}$/.test(candidate.vaultId)) {
     return null;
   }
   return {
     vaultId: candidate.vaultId,
     schemaVersion: OWNER_VAULT_SCHEMA_VERSION,
-    status: 'active',
+    status,
   };
 }
 

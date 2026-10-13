@@ -204,6 +204,34 @@ function appendImageNode<T extends { type: 'doc'; content: Array<{ type: string;
   };
 }
 
+function captionNodes(text: string): Array<{ type: 'paragraph'; content: Array<{ type: 'text'; text: string }> }> {
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => ({
+      type: 'paragraph',
+      content: [{ type: 'text', text: line }],
+    }));
+}
+
+function appendCaptionNodes<T extends { type: 'doc'; content: Array<{ type: string; attrs?: Record<string, unknown>; content?: unknown[] }> }>(
+  document: T,
+  text: string,
+): T {
+  const blocks = captionNodes(text);
+  if (blocks.length === 0) return document;
+  return {
+    ...document,
+    content: [...document.content, ...blocks],
+  };
+}
+
+function pasteCaption(text: string): string {
+  if (clipboardTextIsIncidental(text)) return '';
+  return text.replace(/[\u0000\r]/g, '').trim();
+}
+
 async function readClipboardImageFiles(): Promise<File[]> {
   if (typeof navigator === 'undefined' || !navigator.clipboard?.read) return [];
   try {
@@ -380,6 +408,27 @@ function ToolbarButton({
 const asInputColor = (value: unknown, fallback: string): string =>
   typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value : fallback;
 
+function shortcutHint(keys: string) {
+  const apple = typeof navigator !== 'undefined'
+    && /Mac|iPhone|iPad|iPod/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
+  if (apple) return keys;
+  return keys.replaceAll('⌘⇧', 'Ctrl+Shift+').replaceAll('⌘', 'Ctrl+');
+}
+
+/** Fixed menus inside a transformed editor pane are offset from the viewport. */
+function positionInTransformedPane(anchor: HTMLElement, top: number, left: number) {
+  let node: HTMLElement | null = anchor.parentElement;
+  while (node) {
+    const transform = window.getComputedStyle(node).transform;
+    if (transform && transform !== 'none') {
+      const origin = node.getBoundingClientRect();
+      return { top: top - origin.top, left: left - origin.left };
+    }
+    node = node.parentElement;
+  }
+  return { top, left };
+}
+
 const hasMeaningfulRichHtml = (html: string): boolean =>
   /<(?:h[1-6]|ul|ol|li|blockquote|pre|code|table)\b/i.test(html);
 
@@ -419,7 +468,7 @@ export function RichTextEditor({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const richBackupRef = useRef(richBackup);
   const plainValueRef = useRef(plainValue);
-  const embedFilesRef = useRef<(files: File[]) => Promise<void>>(async () => {});
+  const embedFilesRef = useRef<(files: File[], accompanyingText?: string) => Promise<void>>(async () => {});
   const capturedPasteFilesRef = useRef<File[] | null>(null);
   const pendingClipboardReadRef = useRef<Promise<File[]> | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -465,10 +514,9 @@ export function RichTextEditor({
           const html = event.clipboardData?.getData('text/html') ?? '';
 
           if (captured && captured.length > 0) {
-            const exclusive = clipboardTextIsIncidental(text);
-            if (exclusive) event.preventDefault();
-            void embedFilesRef.current(captured);
-            return exclusive;
+            event.preventDefault();
+            void embedFilesRef.current(captured, text);
+            return true;
           }
 
           if (pendingRead || (/<img\b/i.test(html) && clipboardTextIsIncidental(text))) {
@@ -476,7 +524,7 @@ export function RichTextEditor({
             const read = pendingRead ?? readClipboardImageFiles();
             void read.then(files => {
               if (files.length > 0) {
-                void embedFilesRef.current(files);
+                void embedFilesRef.current(files, text);
                 return;
               }
               const dataFiles = imageDataUrlsFromHtml(html).flatMap((url, index) => {
@@ -487,9 +535,10 @@ export function RichTextEditor({
                 }
               });
               if (dataFiles.length > 0) {
-                void embedFilesRef.current(dataFiles);
+                void embedFilesRef.current(dataFiles, text);
                 return;
               }
+              if (!clipboardTextIsIncidental(text)) void embedFilesRef.current([], text);
               const message = 'That paste did not include the image file. Open Images and add it from your photos.';
               setSmartMessage(message);
               setGalleryError(message);
@@ -623,11 +672,12 @@ export function RichTextEditor({
       return;
     }
 
+    if (galleryError && smartMessage === galleryError) return undefined;
     const timeout = window.setTimeout(() => {
       setSmartMessage(null);
     }, 2800);
     return () => window.clearTimeout(timeout);
-  }, [smartMessage]);
+  }, [galleryError, smartMessage]);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -802,10 +852,33 @@ export function RichTextEditor({
     });
   };
 
-  const embedFiles = async (files: File[]) => {
+  const insertLiveCaption = (caption: string) => {
+    if (!caption) return;
+    const liveEditor = editorRef.current;
+    const richLive = formatRef.current === 'rich' && liveEditor && !liveEditor.isDestroyed;
+    if (!richLive) {
+      const base = plainValueRef.current.replace(/\s+$/, '');
+      const nextValue = base ? `${base}\n\n${caption}` : caption;
+      plainValueRef.current = nextValue;
+      setPlainValue(nextValue);
+      onChangeRef.current({
+        content: nextValue,
+        contentText: nextValue.trim(),
+        format: 'plain',
+      });
+      return;
+    }
+    const blocks = captionNodes(caption);
+    if (blocks.length === 0) return;
+    liveEditor.chain().focus().insertContent(blocks).run();
+  };
+
+  const embedFiles = async (files: File[], accompanyingText = '') => {
+    const caption = pasteCaption(accompanyingText);
     const supported = files.filter(looksLikeImageFile);
     if (supported.length === 0) {
-      reportImageIssue('That file is not a supported image.');
+      if (caption) insertLiveCaption(caption);
+      if (files.length > 0) reportImageIssue('That file is not a supported image.');
       return;
     }
 
@@ -827,7 +900,10 @@ export function RichTextEditor({
           );
         }
       }
-      if (processed.length === 0) return;
+      if (processed.length === 0) {
+        if (caption) insertLiveCaption(caption);
+        return;
+      }
 
       const liveEditor = editorRef.current;
       const richLive = formatRef.current === 'rich' && liveEditor && !liveEditor.isDestroyed;
@@ -840,6 +916,7 @@ export function RichTextEditor({
           smartFormattingRef.current,
         );
         let document = parseRichContent(restored.content);
+        if (caption) document = appendCaptionNodes(document, caption);
         for (const image of processed) {
           const fit = imageFitsDocument(document, image.encodedLength, '');
           if (!fit.fits) {
@@ -850,7 +927,7 @@ export function RichTextEditor({
           document = appendImageNode(document, image);
           added += 1;
         }
-        if (added === 0) return;
+        if (added === 0 && !caption) return;
         onFormatChangeRef.current({
           content: serializeRichDocument(document),
           contentText: richDocumentToContentText(document),
@@ -858,6 +935,7 @@ export function RichTextEditor({
           richBackup: '',
         });
       } else {
+        if (caption) insertLiveCaption(caption);
         for (const image of processed) {
           const document = parseRichContent(JSON.stringify(liveEditor.getJSON()));
           const fit = imageFitsDocument(document, image.encodedLength, richBackupRef.current || '');
@@ -996,7 +1074,7 @@ export function RichTextEditor({
           <span className="rich-text-editor__separator" aria-hidden="true" />
 
           <ToolbarButton
-            label="Bold (⌘B)"
+            label={shortcutHint('Bold (⌘B)')}
             active={Boolean(editor?.isActive('bold'))}
             disabled={!richEnabled}
             onClick={() => editor?.chain().focus().toggleBold().run()}
@@ -1004,7 +1082,7 @@ export function RichTextEditor({
             <TextB size={17} weight="bold" aria-hidden="true" />
           </ToolbarButton>
           <ToolbarButton
-            label="Italic (⌘I)"
+            label={shortcutHint('Italic (⌘I)')}
             active={Boolean(editor?.isActive('italic'))}
             disabled={!richEnabled}
             onClick={() => editor?.chain().focus().toggleItalic().run()}
@@ -1012,7 +1090,7 @@ export function RichTextEditor({
             <TextItalic size={17} aria-hidden="true" />
           </ToolbarButton>
           <ToolbarButton
-            label="Underline (⌘U)"
+            label={shortcutHint('Underline (⌘U)')}
             active={Boolean(editor?.isActive('underline'))}
             disabled={!richEnabled}
             onClick={() => editor?.chain().focus().toggleUnderline().run()}
@@ -1155,14 +1233,14 @@ export function RichTextEditor({
           <span className="rich-text-editor__separator" aria-hidden="true" />
 
           <ToolbarButton
-            label="Undo (⌘Z)"
+            label={shortcutHint('Undo (⌘Z)')}
             disabled={!richEnabled || !canUndo}
             onClick={() => editor?.chain().focus().undo().run()}
           >
             <ArrowCounterClockwise size={17} aria-hidden="true" />
           </ToolbarButton>
           <ToolbarButton
-            label="Redo (⌘⇧Z)"
+            label={shortcutHint('Redo (⌘⇧Z)')}
             disabled={!richEnabled || !canRedo}
             onClick={() => editor?.chain().focus().redo().run()}
           >
@@ -1180,10 +1258,11 @@ export function RichTextEditor({
               ariaExpanded={moreOpen}
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
-                setMorePosition({
-                  top: rect.bottom + 6,
-                  left: Math.max(12, Math.min(window.innerWidth - 202, rect.right - 190)),
-                });
+                setMorePosition(positionInTransformedPane(
+                  event.currentTarget,
+                  rect.bottom + 6,
+                  Math.max(12, Math.min(window.innerWidth - 202, rect.right - 190)),
+                ));
                 setMoreOpen(open => !open);
                 setLinkOpen(false);
               }}
@@ -1350,19 +1429,17 @@ export function RichTextEditor({
               type="button"
               className={`rich-text-editor__smart ${smartFormatting ? 'is-active' : ''}`}
               aria-pressed={smartFormatting}
+              aria-label={`Smart formatting ${smartFormatting ? 'on' : 'off'}`}
               title="Recognize headings, lists, tasks, quotes, and code when pasting"
               onClick={() => onSmartFormattingChange(!smartFormatting)}
             >
               <TextAa size={15} weight="bold" aria-hidden="true" />
-              <span role="status">
-                {smartMessage ??
-                  `Smart formatting ${smartFormatting ? 'on' : 'off'}`}
-              </span>
+              <span>{`Smart formatting ${smartFormatting ? 'on' : 'off'}`}</span>
             </button>
           ) : (
-            <span className="rich-text-editor__smart" role="status">
+            <span className="rich-text-editor__smart">
               <TextAa size={15} weight="bold" aria-hidden="true" />
-              {smartMessage ?? 'Smart formatting on'}
+              <span>Smart formatting on</span>
             </span>
           )}
           <div className="rich-text-editor__mode-switch" aria-label="Editor mode">
@@ -1485,8 +1562,15 @@ export function RichTextEditor({
             }}
           />
         ) : null}
-        {format === 'plain' && smartMessage && !galleryOpen ? (
-          <p className="rich-text-editor__image-notice" role="alert">{smartMessage}</p>
+        {smartMessage && !galleryOpen ? (
+          <p
+            className={galleryError && smartMessage === galleryError
+              ? 'rich-text-editor__image-notice'
+              : 'rich-text-editor__smart-status'}
+            role={galleryError && smartMessage === galleryError ? 'alert' : 'status'}
+          >
+            {smartMessage}
+          </p>
         ) : null}
       </div>
 
@@ -1510,6 +1594,7 @@ export function RichTextEditor({
             onPaste={event => {
               const clipboard = event.clipboardData;
               const files = imageFilesFromDataTransfer(clipboard);
+              const text = clipboard?.getData('text/plain') ?? '';
               const html = files.length > 0 ? '' : clipboard?.getData('text/html') ?? '';
               const dataFiles = files.length > 0
                 ? []
@@ -1523,7 +1608,7 @@ export function RichTextEditor({
               const imageFiles = files.length > 0 ? files : dataFiles;
               if (imageFiles.length > 0) {
                 event.preventDefault();
-                void embedFiles(imageFiles);
+                void embedFiles(imageFiles, text);
                 return;
               }
               const types = Array.from(clipboard?.types ?? []);
@@ -1533,9 +1618,10 @@ export function RichTextEditor({
                 event.preventDefault();
                 void readClipboardImageFiles().then(clipboardFiles => {
                   if (clipboardFiles.length > 0) {
-                    void embedFiles(clipboardFiles);
+                    void embedFiles(clipboardFiles, text);
                     return;
                   }
+                  if (!clipboardTextIsIncidental(text)) void embedFiles([], text);
                   reportImageIssue('That paste did not include the image file. Open Images and add it from your photos.');
                 });
               }

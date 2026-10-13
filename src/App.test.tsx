@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { User } from 'firebase/auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -320,6 +320,74 @@ describe('Note names and writing tools', () => {
     expect(api.setNoteTrashed).not.toHaveBeenCalled();
   });
 
+  it('creates one note when New note is pressed twice before the first save finishes', async () => {
+    let resolveCreate: (id: string) => void = () => undefined;
+    const api = useMockSync([]);
+    api.createNote.mockImplementation(() => new Promise<string>((resolve) => {
+      resolveCreate = resolve;
+    }));
+    render(<App />);
+    const create = screen.getByRole('button', { name: 'Create a new note' });
+    fireEvent.click(create);
+    fireEvent.click(create);
+    expect(api.createNote).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveCreate('created-note');
+    });
+  });
+
+  it('copies an image note by its picture name', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    useMockSync([makeNote({
+      title: 'Sketch',
+      content: JSON.stringify({
+        type: 'doc',
+        content: [{ type: 'image', attrs: { src: 'data:image/png;base64,AAAA', alt: 'Field sketch' } }],
+      }),
+      contentText: '',
+    })]);
+    render(<App />);
+    expect(screen.getByText('Field sketch')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search notes' }), {
+      target: { value: 'harbor' },
+    });
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search notes' }), {
+      target: { value: 'field sketch' },
+    });
+    expect(screen.getByRole('listitem')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy note' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Field sketch'));
+  });
+
+  it('keeps retry usable while the phone editor is open', () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes('max-width: 820px'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+    const api = useMockSync([makeNote()]);
+    const sync = api as NotesSyncApi;
+    sync.error = 'Could not save this note.';
+    sync.syncStatus = 'error';
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /^Swipe me/ }));
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry.closest('.sync-error-banner')).not.toHaveAttribute('aria-hidden');
+    expect(retry.closest('.sync-error-banner')?.hasAttribute('inert')).toBe(false);
+    fireEvent.click(retry);
+    expect(sync.retrySync).toHaveBeenCalled();
+  });
+
   it('copies only the body, leaving the sidebar name out', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
@@ -329,12 +397,14 @@ describe('Note names and writing tools', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Keep this thought.'));
   });
 
-  it('restores the previous panel layout when leaving focus mode', () => {
+  it('restores the previous panel layout when leaving focus mode', async () => {
     useMockSync([makeNote()]);
     const { container } = render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Hide folders' }));
     fireEvent.click(screen.getByRole('button', { name: 'Focus mode' }));
     expect(container.querySelector('main')).toHaveClass('is-focused', 'sidebar-collapsed', 'list-collapsed');
+    expect(await screen.findByRole('combobox', { name: 'Paragraph style' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Plain text' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Exit focus mode' }));
     expect(container.querySelector('main')).toHaveClass('sidebar-collapsed');
     expect(container.querySelector('main')).not.toHaveClass('is-focused', 'list-collapsed');

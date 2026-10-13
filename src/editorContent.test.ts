@@ -6,6 +6,9 @@ import {
   parseRichContent,
   plainTextToRichContent,
   plainTextToRichDocument,
+  richContentToClipboardText,
+  richContentToContentText,
+  richContentToPlainText,
   richDocumentToPlainText,
   restoreRichContentFromPlain,
 } from './editorContent';
@@ -236,6 +239,39 @@ copy on phone
     expect(restored.richBackup).toBe('');
     expect(JSON.parse(restored.content).content[0].marks).toBeUndefined();
     expect(JSON.parse(restored.content).content[0].content[0].marks).toHaveLength(3);
+  });
+
+  it('indexes image names for search and copy without breaking plain-mode restore', () => {
+    const backup = JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'image', attrs: { src: 'data:image/png;base64,AAAA', alt: 'Field sketch' } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Beside the photo' }] },
+      ],
+    });
+    const plain = convertEditorContent(backup, 'rich', 'plain');
+
+    expect(plain.content).toBe('Beside the photo');
+    expect(plain.contentText).toBe('Field sketch\nBeside the photo');
+    expect(richContentToPlainText(backup)).toBe('Beside the photo');
+    expect(richContentToClipboardText(backup)).toBe('Beside the photo\n\nField sketch');
+
+    const restored = restoreRichContentFromPlain(plain.content, backup, false);
+    expect(JSON.parse(restored.content).content[0].type).toBe('image');
+    expect(JSON.parse(restored.content).content[0].attrs.alt).toBe('Field sketch');
+  });
+
+  it('names an image-only note from the picture instead of leaving it blank', () => {
+    const backup = JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'image', attrs: { src: 'data:image/png;base64,AAAA' } },
+      ],
+    });
+
+    expect(richContentToContentText(backup)).toBe('Image');
+    expect(richContentToClipboardText(backup)).toBe('Image');
+    expect(richContentToPlainText(backup)).toBe('');
   });
 
   it('uses current smart-formatting behavior after plain text is actually edited', () => {
