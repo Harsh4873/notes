@@ -48,12 +48,12 @@ export const MAX_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024; // 25 MiB
 // Longest edge, in CSS pixels, an embedded image is scaled down to. Screens in
 // this app never render an image wider than the editor column, so anything
 // larger is wasted bytes.
-export const DEFAULT_MAX_IMAGE_DIMENSION = 1600;
+export const DEFAULT_MAX_IMAGE_DIMENSION = 2048;
 
 // Target encoded byte size for a single embedded image (measured on the raw
 // bytes, before base64). The encoder walks quality/size down until it lands at
 // or below this, so a handful of images comfortably share the note budget.
-export const DEFAULT_IMAGE_BYTE_BUDGET = 90 * 1024; // ~90 KiB raw (~120 KiB base64)
+export const DEFAULT_IMAGE_BYTE_BUDGET = 200 * 1024; // ~200 KiB raw (~267 KiB base64)
 
 // Hard ceiling for a single image's raw bytes. Even if a note is otherwise
 // empty we refuse to embed something larger than this so one image can never
@@ -205,6 +205,41 @@ interface DecodedBitmap {
   cleanup: () => void;
 }
 
+/**
+ * Draws `source` into `context` at (width,height). Large reductions are done in
+ * halving steps with high-quality smoothing so text and fine detail stay crisp
+ * instead of aliasing the way a single nearest-ish pass does.
+ */
+function drawHighQuality(
+  context: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  width: number,
+  height: number,
+): void {
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  let current: CanvasImageSource = source;
+  let currentWidth = sourceWidth;
+  let currentHeight = sourceHeight;
+  while (currentWidth / 2 > width && currentHeight / 2 > height && typeof document !== 'undefined') {
+    const step = document.createElement('canvas');
+    step.width = Math.max(width, Math.round(currentWidth / 2));
+    step.height = Math.max(height, Math.round(currentHeight / 2));
+    const stepContext = step.getContext('2d');
+    if (!stepContext) break;
+    stepContext.imageSmoothingEnabled = true;
+    stepContext.imageSmoothingQuality = 'high';
+    stepContext.drawImage(current, 0, 0, step.width, step.height);
+    current = step;
+    currentWidth = step.width;
+    currentHeight = step.height;
+  }
+  context.clearRect(0, 0, width, height);
+  context.drawImage(current, 0, 0, width, height);
+}
+
 async function decodeImage(file: Blob): Promise<DecodedBitmap> {
   // Prefer createImageBitmap: it decodes off the main thread and avoids the
   // <img> load dance. Fall back to an object-URL <img> when unavailable.
@@ -217,7 +252,7 @@ async function decodeImage(file: Blob): Promise<DecodedBitmap> {
         draw: (canvas, width, height) => {
           const context = canvas.getContext('2d');
           if (!context) throw new ImageAttachmentError('This browser cannot process images.');
-          context.drawImage(bitmap, 0, 0, width, height);
+          drawHighQuality(context, bitmap, bitmap.width, bitmap.height, width, height);
         },
         cleanup: () => bitmap.close(),
       };
@@ -240,7 +275,7 @@ async function decodeImage(file: Blob): Promise<DecodedBitmap> {
       draw: (canvas, width, height) => {
         const context = canvas.getContext('2d');
         if (!context) throw new ImageAttachmentError('This browser cannot process images.');
-        context.drawImage(image, 0, 0, width, height);
+        drawHighQuality(context, image, image.naturalWidth, image.naturalHeight, width, height);
       },
       cleanup: () => URL.revokeObjectURL(url),
     };
@@ -294,13 +329,13 @@ export async function processImageFile(
     let dimension = maxDimension;
     let best: ProcessedImage | null = null;
 
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
       const { width, height } = scaledDimensions(decoded.width, decoded.height, dimension);
       canvas.width = width;
       canvas.height = height;
       decoded.draw(canvas, width, height);
 
-      const qualities = encodeType === 'image/png' ? [1] : [0.82, 0.7, 0.58, 0.45];
+      const qualities = encodeType === 'image/png' ? [1] : [0.92, 0.86, 0.8, 0.72];
       for (const quality of qualities) {
         const dataUrl = canvasToDataUrl(canvas, encodeType, quality);
         const encodedLength = dataUrlByteSize(dataUrl);
@@ -320,7 +355,7 @@ export async function processImageFile(
       // Still too big: shrink the longest edge and try again.
       const longest = Math.max(width, height);
       if (longest <= 320) break; // Don't degrade past a usable thumbnail.
-      dimension = Math.round(longest * 0.75);
+      dimension = Math.round(longest * 0.85);
     }
 
     if (best && best.encodedLength <= MAX_EMBEDDED_IMAGE_BYTES) {
