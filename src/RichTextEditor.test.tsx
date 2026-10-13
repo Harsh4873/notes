@@ -480,3 +480,89 @@ describe('RichTextEditor images', () => {
     expect(within(gallery).getByText('No images in this note yet.')).toBeInTheDocument();
   });
 });
+
+describe('RichTextEditor history', () => {
+  it('does not undo a replaced document back over the open note', async () => {
+    const onChange = vi.fn();
+    const local = JSON.stringify({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Local draft' }] }],
+    });
+    const remote = JSON.stringify({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Cloud copy' }] }],
+    });
+    const { container, rerender } = render(
+      <RichTextEditor
+        noteId="same-note"
+        format="rich"
+        content={local}
+        onChange={onChange}
+        onFormatChange={vi.fn()}
+      />,
+    );
+
+    expect(container).toHaveTextContent('Local draft');
+    rerender(
+      <RichTextEditor
+        noteId="same-note"
+        format="rich"
+        content={remote}
+        onChange={onChange}
+        onFormatChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(container).toHaveTextContent('Cloud copy'));
+    const undo = within(container).getByRole('button', { name: /^Undo/ });
+    expect(undo).toBeDisabled();
+    fireEvent.click(undo);
+    expect(container).toHaveTextContent('Cloud copy');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('drops undo history when a cloud snapshot replaces an edited note', async () => {
+    const onChange = vi.fn();
+    const local = JSON.stringify({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Local draft' }] }],
+    });
+    const remote = JSON.stringify({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Cloud copy' }] }],
+    });
+    const { container, rerender } = render(
+      <RichTextEditor
+        noteId="edited-note"
+        format="rich"
+        content={local}
+        onChange={onChange}
+        onFormatChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(within(container).getByRole('button', { name: 'Insert 3 by 3 table' }));
+    await waitFor(() => {
+      expect(within(container).getByRole('button', { name: /^Undo/ })).toBeEnabled();
+    });
+    onChange.mockClear();
+
+    rerender(
+      <RichTextEditor
+        noteId="edited-note"
+        format="rich"
+        content={remote}
+        onChange={onChange}
+        onFormatChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(container).toHaveTextContent('Cloud copy'));
+    const undo = within(container).getByRole('button', { name: /^Undo/ });
+    expect(undo).toBeDisabled();
+    fireEvent.click(undo);
+    expect(container).toHaveTextContent('Cloud copy');
+    expect(container.querySelector('table')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

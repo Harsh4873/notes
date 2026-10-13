@@ -114,10 +114,28 @@ function parseFormat(value: unknown): NoteFormat | null {
   return value === 'rich' || value === 'plain' ? value : null;
 }
 
+/** Firestore `string.size()` counts UTF-8 bytes, not JavaScript UTF-16 units. */
+export function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+/** Shortens to a UTF-8 budget without splitting a surrogate pair. */
+export function truncateToUtf8Bytes(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  if (utf8ByteLength(value) <= maxBytes) return value;
+  let used = 0;
+  let result = '';
+  for (const character of value) {
+    const size = utf8ByteLength(character);
+    if (used + size > maxBytes) break;
+    used += size;
+    result += character;
+  }
+  return result;
+}
+
 export function noteTextByteSize(content: string, contentText: string, richBackup: string): number {
-  return new TextEncoder().encode(content).byteLength
-    + new TextEncoder().encode(contentText).byteLength
-    + new TextEncoder().encode(richBackup).byteLength;
+  return utf8ByteLength(content) + utf8ByteLength(contentText) + utf8ByteLength(richBackup);
 }
 
 export function isNoteRevision(value: unknown): value is number {
@@ -135,10 +153,10 @@ export function parseNoteRecord(value: unknown, documentId?: string): NoteRecord
     || typeof value.contentText !== 'string'
     || typeof value.richBackup !== 'string'
     || typeof value.pinned !== 'boolean') return null;
-  if (value.title.length > MAX_NOTE_TITLE_LENGTH
-    || value.content.length > MAX_NOTE_CONTENT_LENGTH
-    || value.contentText.length > MAX_NOTE_CONTENT_TEXT_LENGTH
-    || value.richBackup.length > MAX_NOTE_RICH_BACKUP_LENGTH
+  if (utf8ByteLength(value.title) > MAX_NOTE_TITLE_LENGTH
+    || utf8ByteLength(value.content) > MAX_NOTE_CONTENT_LENGTH
+    || utf8ByteLength(value.contentText) > MAX_NOTE_CONTENT_TEXT_LENGTH
+    || utf8ByteLength(value.richBackup) > MAX_NOTE_RICH_BACKUP_LENGTH
     || noteTextByteSize(value.content, value.contentText, value.richBackup) > MAX_NOTE_TEXT_BYTES
     || !isNoteRevision(value.revision)
     || !isFolderId(value.folderId)) return null;
@@ -152,7 +170,7 @@ export function parseNoteRecord(value: unknown, documentId?: string): NoteRecord
     || !value.labels.every((label) => (
       typeof label === 'string'
       && label.trim().length > 0
-      && label.length <= MAX_LABEL_LENGTH
+      && utf8ByteLength(label) <= MAX_LABEL_LENGTH
     ))
     || new Set(value.labels).size !== value.labels.length) return null;
 
@@ -190,7 +208,7 @@ export function parseFolderRecord(value: unknown, documentId?: string): FolderRe
   if (!isRecordId(value.id) || (documentId !== undefined && value.id !== documentId)) return null;
   if (typeof value.name !== 'string'
     || value.name.trim().length === 0
-    || value.name.length > MAX_FOLDER_NAME_LENGTH) return null;
+    || utf8ByteLength(value.name) > MAX_FOLDER_NAME_LENGTH) return null;
   if (!isFolderColor(value.color) || !isFolderOrder(value.order)) return null;
 
   const createdAt = timestampToIso(value.createdAt);
@@ -226,7 +244,10 @@ export function normalizeLabels(labels: readonly string[]): string[] {
   const seen = new Set<string>();
 
   for (const label of labels) {
-    const clean = label.trim().replace(/\s+/g, ' ').slice(0, MAX_LABEL_LENGTH).trim();
+    const clean = truncateToUtf8Bytes(
+      label.trim().replace(/\s+/g, ' '),
+      MAX_LABEL_LENGTH,
+    ).trim();
     const comparisonKey = clean.toLocaleLowerCase();
     if (!clean || seen.has(comparisonKey)) continue;
     normalized.push(clean);

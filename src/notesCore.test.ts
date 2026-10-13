@@ -5,6 +5,7 @@ import {
   filterNotes,
   noteTextByteSize,
   normalizeLabels,
+  truncateToUtf8Bytes,
   parseFolderRecord,
   parseNoteRecord,
   parseNotesSettings,
@@ -67,6 +68,15 @@ describe('strict Firestore parsing', () => {
     expect(parseNoteRecord(note, 'different-id')).toBeNull();
     expect(parseNoteRecord({ ...note, labels: new Array(13).fill('label') }, note.id)).toBeNull();
     expect(parseNoteRecord({ ...note, title: 'x'.repeat(241) }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, title: '🙂'.repeat(61) }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, title: '🙂'.repeat(60) }, note.id)?.title).toBe('🙂'.repeat(60));
+    expect(parseNoteRecord({
+      ...note,
+      content: '🙂'.repeat(150_001),
+      contentText: '',
+      richBackup: '',
+    }, note.id)).toBeNull();
+    expect(parseNoteRecord({ ...note, labels: ['🙂'.repeat(13)] }, note.id)).toBeNull();
     expect(parseNoteRecord({ ...note, folderId: 'not a valid id' }, note.id)).toBeNull();
     expect(parseNoteRecord({ ...note, labels: ['Travel', 'Travel'] }, note.id)).toBeNull();
     expect(parseNoteRecord({ ...note, labels: ['   '] }, note.id)).toBeNull();
@@ -114,6 +124,8 @@ describe('strict Firestore parsing', () => {
     expect(parseFolderRecord({ ...folder, color: 'not a color!' }, folder.id)).toBeNull();
     expect(parseFolderRecord({ ...folder, color: 'not_allowed' }, folder.id)).toBeNull();
     expect(parseFolderRecord({ ...folder, name: 'x'.repeat(81) }, folder.id)).toBeNull();
+    expect(parseFolderRecord({ ...folder, name: '🙂'.repeat(21) }, folder.id)).toBeNull();
+    expect(parseFolderRecord({ ...folder, name: '🙂'.repeat(20) }, folder.id)?.name).toBe('🙂'.repeat(20));
     expect(parseFolderRecord({ ...folder, name: ' \t\n ' }, folder.id)).toBeNull();
 
     expect(parseNotesSettings({ theme: 'dark', smartFormatting: true, updatedAt: newer }))
@@ -153,6 +165,9 @@ describe('labels', () => {
     expect(normalized).toHaveLength(12);
     expect(normalized.filter((label) => label.toLowerCase() === 'school work')).toHaveLength(1);
     expect(normalizeLabels(['x'.repeat(60)])[0]).toHaveLength(48);
+    expect(normalizeLabels(['🙂'.repeat(20)])).toEqual(['🙂'.repeat(12)]);
+    expect(truncateToUtf8Bytes(`A${'🙂'.repeat(2)}`, 5)).toBe('A🙂');
+    expect(truncateToUtf8Bytes('🙂A', 2)).toBe('');
   });
 
   it('collects case-insensitive label counts for filter menus', () => {

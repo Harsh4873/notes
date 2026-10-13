@@ -248,6 +248,40 @@ describe('Workspace usability', () => {
     });
   });
 
+  it('keeps dialog focus stable while typing', async () => {
+    useMockSync([makeNote()]);
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Quick capture/ }));
+    const capture = screen.getByRole('textbox', { name: 'Quick capture' });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    fireEvent.change(capture, { target: { value: 'Remember milk' } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(focus).not.toHaveBeenCalled();
+    expect(capture).toHaveValue('Remember milk');
+    focus.mockRestore();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+    const folderName = screen.getByLabelText('Folder name');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const focusAgain = vi.spyOn(HTMLElement.prototype, 'focus');
+    fireEvent.change(folderName, { target: { value: 'Travel' } });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(focusAgain).not.toHaveBeenCalled();
+    expect(folderName).toHaveValue('Travel');
+    focusAgain.mockRestore();
+  });
+
   it('creates folders with the selected color', async () => {
     const api = useMockSync([]);
     render(<App />);

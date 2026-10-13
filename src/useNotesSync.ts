@@ -48,6 +48,8 @@ import {
   isRecordId,
   noteTextByteSize,
   normalizeLabels,
+  truncateToUtf8Bytes,
+  utf8ByteLength,
   parseFolderRecord,
   parseNoteRecord,
   parseNotesSettings,
@@ -629,16 +631,16 @@ export function useNotesSync(): NotesSyncApi {
     const content = input.content ?? '';
     const contentText = input.contentText ?? (format === 'plain' ? content : '');
     const richBackup = input.richBackup ?? '';
-    if (content.length > MAX_NOTE_CONTENT_LENGTH) throw new Error('This note is too large to sync safely.');
-    if (contentText.length > MAX_NOTE_CONTENT_TEXT_LENGTH) throw new Error('This note has too much searchable text to sync safely.');
-    if (richBackup.length > MAX_NOTE_RICH_BACKUP_LENGTH) throw new Error('This note backup is too large to sync safely.');
+    if (utf8ByteLength(content) > MAX_NOTE_CONTENT_LENGTH) throw new Error('This note is too large to sync safely.');
+    if (utf8ByteLength(contentText) > MAX_NOTE_CONTENT_TEXT_LENGTH) throw new Error('This note has too much searchable text to sync safely.');
+    if (utf8ByteLength(richBackup) > MAX_NOTE_RICH_BACKUP_LENGTH) throw new Error('This note backup is too large to sync safely.');
     if (noteTextByteSize(content, contentText, richBackup) > MAX_NOTE_TEXT_BYTES) {
       throw new Error('This note and its rich-text backup are too large to sync safely together.');
     }
     const reference = doc(notesCollection(uid));
     await trackWrite(setDoc(reference, {
       id: reference.id,
-      title: (input.title ?? '').slice(0, MAX_NOTE_TITLE_LENGTH),
+      title: truncateToUtf8Bytes(input.title ?? '', MAX_NOTE_TITLE_LENGTH),
       content,
       contentText,
       richBackup,
@@ -668,23 +670,23 @@ export function useNotesSync(): NotesSyncApi {
     const data: Record<string, unknown> = {};
     if (patch.title !== undefined) {
       assertText(patch.title, 'Note title');
-      data.title = patch.title.slice(0, MAX_NOTE_TITLE_LENGTH);
+      data.title = truncateToUtf8Bytes(patch.title, MAX_NOTE_TITLE_LENGTH);
     }
     if (patch.content !== undefined) {
       assertText(patch.content, 'Note content');
-      if (patch.content.length > MAX_NOTE_CONTENT_LENGTH) throw new Error('This note is too large to sync safely.');
+      if (utf8ByteLength(patch.content) > MAX_NOTE_CONTENT_LENGTH) throw new Error('This note is too large to sync safely.');
       data.content = patch.content;
     }
     if (patch.contentText !== undefined) {
       assertText(patch.contentText, 'Searchable note text');
-      if (patch.contentText.length > MAX_NOTE_CONTENT_TEXT_LENGTH) {
+      if (utf8ByteLength(patch.contentText) > MAX_NOTE_CONTENT_TEXT_LENGTH) {
         throw new Error('This note has too much searchable text to sync safely.');
       }
       data.contentText = patch.contentText;
     }
     if (patch.richBackup !== undefined) {
       assertText(patch.richBackup, 'Rich text backup');
-      if (patch.richBackup.length > MAX_NOTE_RICH_BACKUP_LENGTH) {
+      if (utf8ByteLength(patch.richBackup) > MAX_NOTE_RICH_BACKUP_LENGTH) {
         throw new Error('This note backup is too large to sync safely.');
       }
       data.richBackup = patch.richBackup;
@@ -783,7 +785,7 @@ export function useNotesSync(): NotesSyncApi {
     const uid = activeUidRef.current;
     if (!uid) throw new Error('Sign in before creating a folder.');
     assertText(name, 'Folder name');
-    const cleanName = name.trim().slice(0, MAX_FOLDER_NAME_LENGTH).trim();
+    const cleanName = truncateToUtf8Bytes(name.trim(), MAX_FOLDER_NAME_LENGTH).trim();
     if (!cleanName) throw new Error('Give the folder a name.');
     if (color !== undefined && !isFolderColor(color)) {
       throw new Error('Choose a valid folder color.');
@@ -813,7 +815,7 @@ export function useNotesSync(): NotesSyncApi {
     const data: Record<string, unknown> = {};
     if (patch.name !== undefined) {
       assertText(patch.name, 'Folder name');
-      const cleanName = patch.name.trim().slice(0, MAX_FOLDER_NAME_LENGTH).trim();
+      const cleanName = truncateToUtf8Bytes(patch.name.trim(), MAX_FOLDER_NAME_LENGTH).trim();
       if (!cleanName) throw new Error('Give the folder a name.');
       data.name = cleanName;
     }

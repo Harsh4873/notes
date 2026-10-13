@@ -100,8 +100,8 @@ export function looksLikeImageFile(file: { type?: string; name?: string }): bool
  * still fits under the shared 850 KB text budget once the current body,
  * searchable text, and rich backup are accounted for.
  *
- * `contentLength` is the UTF-16 length of the serialized rich `content` string
- * (the field an embedded image grows), mirroring the client + ruleset checks.
+ * `contentLength` is the UTF-8 byte length of the serialized rich `content`
+ * field, matching Firestore `string.size()`.
  */
 export function imageFitsNoteBudget(params: {
   encodedLength: number;

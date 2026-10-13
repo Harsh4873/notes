@@ -37,7 +37,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TextAlign from '@tiptap/extension-text-align';
 import { TextStyle } from '@tiptap/extension-text-style';
 import { Fragment, Slice } from '@tiptap/pm/model';
-import { TextSelection } from '@tiptap/pm/state';
+import { TextSelection, type EditorState, type Plugin } from '@tiptap/pm/state';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from 'react';
@@ -145,10 +145,11 @@ const EDITOR_EXTENSIONS = [
             return src;
           },
           renderHTML: (attributes: Record<string, unknown>) => {
-            if (!attributes.src) {
+            const src = attributes.src;
+            if (typeof src !== 'string' || !src.startsWith('data:image/')) {
               return {};
             }
-            return { src: attributes.src };
+            return { src };
           },
         },
       };
@@ -189,6 +190,39 @@ function imagesInEditor(editor: Editor): GalleryImage[] {
     images.push({ key: `${pos}`, pos, src, alt });
   });
   return images;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isHistoryPlugin(plugin: Plugin, state: EditorState): boolean {
+  const field: unknown = plugin.getState(state);
+  if (!isRecord(field) || !plugin.spec.key || !plugin.spec.state) return false;
+  const done = field.done;
+  const undone = field.undone;
+  return isRecord(done)
+    && isRecord(undone)
+    && typeof done.eventCount === 'number'
+    && typeof undone.eventCount === 'number';
+}
+
+function setEditorContentWithoutHistory(editor: Editor, content: ReturnType<typeof parseRichContent>) {
+  editor.chain().command(({ tr, dispatch, state }) => {
+    if (!dispatch) return true;
+    // Replacing the open note must not become an undo step, and earlier
+    // keystrokes must not stay undoable against the replacement.
+    tr.setMeta('addToHistory', false);
+    const historyPlugin = state.plugins.find((plugin) => isHistoryPlugin(plugin, state));
+    const historyField = historyPlugin?.spec.state;
+    const historyKey = historyPlugin?.spec.key;
+    if (historyPlugin && historyField && historyKey) {
+      tr.setMeta(historyKey, {
+        historyState: historyField.init({ schema: state.schema }, state),
+      });
+    }
+    return true;
+  }).setContent(content, { emitUpdate: false }).run();
 }
 
 function appendImageNode<T extends { type: 'doc'; content: Array<{ type: string; attrs?: Record<string, unknown>; content?: unknown[] }> }>(
@@ -753,10 +787,30 @@ export function RichTextEditor({
       return;
     }
     if (current !== serializeRichDocument(document)) {
-      editor.commands.setContent(document, { emitUpdate: false });
+      setEditorContentWithoutHistory(editor, document);
       setToolbarRevision(revision => revision + 1);
     }
   }, [content, editor, format, noteId]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || !editor) return;
+    let frame = 0;
+    const scrollCaret = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (editor.isDestroyed || !editor.isFocused) return;
+        editor.commands.scrollIntoView();
+      });
+    };
+    viewport.addEventListener('resize', scrollCaret);
+    viewport.addEventListener('scroll', scrollCaret);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      viewport.removeEventListener('resize', scrollCaret);
+      viewport.removeEventListener('scroll', scrollCaret);
+    };
+  }, [editor]);
 
   const richEnabled = Boolean(editor) && format === 'rich';
   const textStyle = editor?.isActive('heading', { level: 1 })
@@ -841,12 +895,13 @@ export function RichTextEditor({
     const serialized = serializeRichDocument(document);
     const contentText = richDocumentToContentText(document);
     const encoder = new TextEncoder();
+    const contentBytes = encoder.encode(serialized).byteLength;
     return imageFitsNoteBudget({
       encodedLength,
-      contentBytes: encoder.encode(serialized).byteLength,
+      contentBytes,
       contentTextBytes: encoder.encode(contentText).byteLength,
       richBackupBytes: encoder.encode(backup).byteLength,
-      contentLength: serialized.length,
+      contentLength: contentBytes,
       maxTextBytes: MAX_NOTE_TEXT_BYTES,
       maxContentLength: MAX_NOTE_CONTENT_LENGTH,
     });
@@ -999,7 +1054,9 @@ export function RichTextEditor({
     }
 
     const next = restoreRichContentFromPlain(plainValue, richBackup, smartFormatting);
-    editor?.commands.setContent(parseRichContent(next.content), { emitUpdate: false });
+    if (editor && !editor.isDestroyed) {
+      setEditorContentWithoutHistory(editor, parseRichContent(next.content));
+    }
     onFormatChangeRef.current(next);
   };
 

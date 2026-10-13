@@ -430,3 +430,31 @@ describe('google sign-in', () => {
     expect(view.result.current.authStatus).toBe('signed-out');
   });
 });
+
+describe('UTF-8 field limits', () => {
+  it('stores titles and folder names by UTF-8 bytes', async () => {
+    const view = await renderSignedInSync();
+    await act(async () => {
+      await view.result.current.createNote({ title: '🙂'.repeat(120), content: 'Hi', contentText: 'Hi' });
+      await view.result.current.createFolder('🙂'.repeat(40));
+    });
+
+    const calls = harness.setDoc.mock.calls as unknown as Array<[unknown, { title?: string; name?: string }]>;
+    const note = calls.find((call) => call[1]?.title)?.[1];
+    const folder = calls.find((call) => call[1]?.name)?.[1];
+    expect(note?.title).toBe('🙂'.repeat(60));
+    expect(new TextEncoder().encode(note?.title ?? '').byteLength).toBe(240);
+    expect(folder?.name).toBe('🙂'.repeat(20));
+    expect(new TextEncoder().encode(folder?.name ?? '').byteLength).toBe(80);
+  });
+
+  it('rejects note text that fits JavaScript length but not the UTF-8 field cap', async () => {
+    const view = await renderSignedInSync();
+    await expect(view.result.current.createNote({
+      content: '🙂'.repeat(150_001),
+      contentText: '',
+      format: 'rich',
+    })).rejects.toThrow(/too large/);
+    expect(harness.setDoc).not.toHaveBeenCalled();
+  });
+});

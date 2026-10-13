@@ -274,6 +274,162 @@ copy on phone
     expect(richContentToPlainText(backup)).toBe('');
   });
 
+  it('turns multiline table cells back into line breaks, including after an edit', () => {
+    const source = [
+      '| Note | line1<br>line2 |',
+      '| --- | --- |',
+      '| A | B |',
+    ].join('\n');
+    const document = plainTextToRichDocument(source);
+    const headerCell = document.content[0].content?.[0].content?.[1];
+    expect(headerCell?.content?.[0].content?.map(node => (
+      node.type === 'hardBreak' ? '\n' : node.text
+    )).join('')).toBe('line1\nline2');
+    expect(richDocumentToPlainText(document)).toBe(source);
+
+    const edited = source.replace('| A | B |', '| A | C |');
+    const restored = JSON.parse(restoreRichContentFromPlain(edited, JSON.stringify(document), true).content) as typeof document;
+    const restoredCell = restored.content[0].content?.[0].content?.[1];
+    expect(restoredCell?.content?.[0].content?.some(node => node.type === 'hardBreak')).toBe(true);
+    expect(richDocumentToPlainText(restored)).toBe(edited);
+  });
+
+  it('keeps a literal br tag in a table cell distinct from a line break', () => {
+    const document = {
+      type: 'doc' as const,
+      content: [{
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: [
+              {
+                type: 'tableHeader',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A' }] }],
+              },
+              {
+                type: 'tableHeader',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'use <br> here' }] }],
+              },
+            ],
+          },
+          {
+            type: 'tableRow',
+            content: [
+              {
+                type: 'tableCell',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'B' }] }],
+              },
+              {
+                type: 'tableCell',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'C' }] }],
+              },
+            ],
+          },
+        ],
+      }],
+    };
+    const plain = richDocumentToPlainText(document);
+    expect(plain).toContain('use \\<br> here');
+    const roundTrip = plainTextToRichDocument(plain);
+    const cell = roundTrip.content[0].content?.[0].content?.[1];
+    expect(cell?.content?.[0].content?.map(node => node.text).join('')).toBe('use <br> here');
+    expect(cell?.content?.[0].content?.some(node => node.type === 'hardBreak')).toBe(false);
+  });
+
+  it('keeps embedded images when the plain text around them changes', () => {
+    const backup = JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'image', attrs: { src: 'data:image/png;base64,AAAA', alt: 'Field sketch' } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Beside the photo' }] },
+      ],
+    });
+
+    const restored = JSON.parse(restoreRichContentFromPlain('Beside the photo!', backup, false).content);
+    expect(restored.content.map((node: { type: string }) => node.type)).toEqual(['image', 'paragraph']);
+    expect(restored.content[0].attrs.src).toBe('data:image/png;base64,AAAA');
+    expect(restored.content[0].attrs.alt).toBe('Field sketch');
+    expect(restored.content[1].content[0].text).toBe('Beside the photo!');
+  });
+
+  it('keeps pictures when an image-only note gains a caption', () => {
+    const backup = JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'image', attrs: { src: 'data:image/png;base64,AAAA', alt: 'Field sketch' } },
+      ],
+    });
+
+    const restored = JSON.parse(restoreRichContentFromPlain('Caption', backup, false).content);
+    expect(restored.content[0].type).toBe('image');
+    expect(restored.content[0].attrs.src).toBe('data:image/png;base64,AAAA');
+    expect(restored.content[1].content[0].text).toBe('Caption');
+  });
+
+  it('keeps nested lists and text marks when a plain-text typo is fixed', () => {
+    const backup = JSON.stringify({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          attrs: { textAlign: 'center' },
+          content: [{
+            type: 'text',
+            text: 'Styled thought',
+            marks: [
+              { type: 'underline' },
+              { type: 'highlight', attrs: { color: '#f9e8a7' } },
+            ],
+          }],
+        },
+        {
+          type: 'bulletList',
+          content: [{
+            type: 'listItem',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'Parent' }] },
+              {
+                type: 'bulletList',
+                content: [{
+                  type: 'listItem',
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Child' }] }],
+                }],
+              },
+            ],
+          }],
+        },
+      ],
+    });
+    const plain = richContentToPlainText(backup);
+    expect(plain).toBe('Styled thought\n\n- Parent\n  - Child');
+
+    const restored = JSON.parse(restoreRichContentFromPlain(
+      plain.replace('Styled thought', 'Styled thoughts').replace('Child', 'Child!'),
+      backup,
+      false,
+    ).content);
+    expect(restored.content[0].attrs).toEqual({ textAlign: 'center' });
+    expect(restored.content[0].content[0].text).toBe('Styled thoughts');
+    expect(restored.content[0].content[0].marks).toHaveLength(2);
+    expect(restored.content[1].content[0].content[1].type).toBe('bulletList');
+    expect(restored.content[1].content[0].content[1].content[0].content[0].content[0].text).toBe('Child!');
+  });
+
+  it('drops remote image URLs when reading stored JSON', () => {
+    const document = parseRichContent(JSON.stringify({
+      type: 'doc',
+      content: [
+        { type: 'image', attrs: { src: 'https://tracker.example/px.png', alt: 'Remote' } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Hi' }] },
+      ],
+    }));
+
+    expect(JSON.stringify(document)).not.toContain('http');
+    expect(document.content.some(node => node.type === 'image')).toBe(false);
+    expect(document.content[0].content?.[0].text).toBe('Hi');
+  });
+
   it('uses current smart-formatting behavior after plain text is actually edited', () => {
     const original = plainTextToRichContent('## Heading\n- Item').content;
 

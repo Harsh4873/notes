@@ -33,6 +33,7 @@ import { WarningCircle } from '@phosphor-icons/react/WarningCircle';
 import { X } from '@phosphor-icons/react/X';
 import type { User } from 'firebase/auth';
 import {
+  type CSSProperties,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -45,6 +46,7 @@ import {
   useState,
 } from 'react';
 import { richContentToClipboardText, richContentToContentText } from './editorContent';
+import { MAX_LABEL_LENGTH, MAX_NOTE_TITLE_LENGTH, truncateToUtf8Bytes } from './notesCore';
 import { ErrorBoundary } from './ErrorBoundary';
 import type { EditorChange } from './RichTextEditor';
 import type { FolderRecord, NoteRecord, NotesSettings, ThemePreference } from './types';
@@ -260,18 +262,19 @@ function isTransientSaveError(error: unknown) {
 }
 
 // The software keyboard shrinks the visual viewport but not the layout
-// viewport, so a `position: fixed` bottom bar ends up sitting on top of the
-// line you are writing. Track how much the keyboard covers so the chrome can
-// get out of the way while typing.
+// viewport, so a fixed editor stays under the keys. Return how many pixels
+// are covered (0 when the keyboard is closed) so the writing surface can sit
+// above it.
 function useKeyboardCovered() {
-  const [covered, setCovered] = useState(false);
+  const [covered, setCovered] = useState(0);
 
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!viewport) return;
     const update = () => {
       const hidden = window.innerHeight - viewport.height - viewport.offsetTop;
-      setCovered(hidden > 90);
+      const next = hidden > 90 ? Math.round(hidden) : 0;
+      setCovered(current => (current === next ? current : next));
     };
     update();
     viewport.addEventListener('resize', update);
@@ -621,6 +624,8 @@ interface ModalShellProps {
 
 function ModalShell({ children, label, onClose }: ModalShellProps) {
   const layerRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const layer = layerRef.current;
@@ -640,14 +645,16 @@ function ModalShell({ children, label, onClose }: ModalShellProps) {
       element.setAttribute('aria-hidden', 'true');
     });
 
-    window.setTimeout(() => {
+    // Callers often pass a fresh onClose each render. Re-running this effect
+    // would steal focus from the field on every keystroke.
+    const focusTimer = window.setTimeout(() => {
       const preferred = layer?.querySelector<HTMLElement>('[autofocus], [data-autofocus]');
       const first = layer?.querySelector<HTMLElement>('button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
       (preferred ?? first)?.focus();
     }, 0);
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') onCloseRef.current();
       if (event.key !== 'Tab' || !layer) return;
       const focusable = Array.from(layer.querySelectorAll<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
@@ -665,6 +672,7 @@ function ModalShell({ children, label, onClose }: ModalShellProps) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      window.clearTimeout(focusTimer);
       window.removeEventListener('keydown', onKeyDown);
       previousInert.forEach(({ element, inert, ariaHidden }) => {
         element.inert = inert;
@@ -673,7 +681,7 @@ function ModalShell({ children, label, onClose }: ModalShellProps) {
       });
       previousFocus?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div ref={layerRef} className="modal-layer" role="presentation" onMouseDown={(event) => {
@@ -734,7 +742,7 @@ export function App() {
   const sync = useNotesSync();
   const settings = sync.settings ?? DEFAULT_SETTINGS;
   const isMobileLayout = useMediaQuery('(max-width: 820px)');
-  const keyboardCovered = useKeyboardCovered();
+  const keyboardCover = useKeyboardCovered();
   const [view, setView] = useState<ViewKey>('inbox');
   const [activeNoteId, setActiveNoteId] = useState<string>();
   const [search, setSearch] = useState('');
@@ -1435,7 +1443,7 @@ export function App() {
 
   const submitRename = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const name = renameDraft.trim().replace(/\s+/g, ' ').slice(0, 240);
+    const name = truncateToUtf8Bytes(renameDraft.trim().replace(/\s+/g, ' '), MAX_NOTE_TITLE_LENGTH);
     if (!renameNoteId || !name) return;
     const note = allNotes.find((candidate) => candidate.id === renameNoteId);
     if (!note || note.deleted) { closeRename(); return; }
@@ -1457,7 +1465,10 @@ export function App() {
     setNoteDetailsOpen(false);
     try {
       const id = await sync.createNote({
-        title: `${note.title || noteTitleFromText(noteReadableText(note))} (copy)`.slice(0, 240),
+        title: truncateToUtf8Bytes(
+          `${note.title || noteTitleFromText(noteReadableText(note))} (copy)`,
+          MAX_NOTE_TITLE_LENGTH,
+        ),
         content: note.content,
         contentText: noteReadableText(note),
         richBackup: note.richBackup,
@@ -1704,7 +1715,7 @@ export function App() {
   const addLabel = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!activeNote) return;
-    const normalized = labelDraft.trim().replace(/\s+/g, ' ').slice(0, 48);
+    const normalized = truncateToUtf8Bytes(labelDraft.trim().replace(/\s+/g, ' '), MAX_LABEL_LENGTH);
     if (!normalized) return;
     const nextLabels = Array.from(new Set([...activeNote.labels, normalized])).slice(0, 12);
     queueNotePatch(activeNote.id, { labels: nextLabels });
@@ -1846,7 +1857,10 @@ export function App() {
   const mobileChromeHidden = isMobileLayout && (mobileNavOpen || mobilePane === 'editor');
 
   return (
-    <main className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${listCollapsed ? 'list-collapsed' : ''} ${focusMode ? 'is-focused' : ''} ${keyboardCovered && !mobileNavOpen ? 'keyboard-open' : ''}`}>
+    <main
+      className={`app-shell mobile-pane-${mobilePane} ${mobileNavOpen ? 'mobile-nav-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${listCollapsed ? 'list-collapsed' : ''} ${focusMode ? 'is-focused' : ''} ${keyboardCover > 0 && !mobileNavOpen ? 'keyboard-open' : ''}`}
+      style={keyboardCover > 0 ? ({ '--keyboard-cover': `${keyboardCover}px` } as CSSProperties) : undefined}
+    >
       <aside
         ref={sidebarRef}
         className="sidebar"
@@ -1972,7 +1986,7 @@ export function App() {
           ) : <kbd>{shortcutHint('⌘K')}</kbd>}
         </label>
 
-        <button className="topbar-capture-button" type="button" onClick={() => void createNewNote()}>
+        <button className="topbar-capture-button" type="button" aria-label="New note" onClick={() => void createNewNote()}>
           <NotePencil aria-hidden="true" />
           <span>New note</span>
         </button>
@@ -2433,6 +2447,7 @@ export function App() {
               placeholder={'Paste or type anything…'}
               aria-label="Quick capture"
               rows={10}
+              data-autofocus
             />
             <footer>
               <span><span className={`status-dot sync-${effectiveSyncStatus}`} />{offline ? 'Reconnect to save safely' : 'Saves to Inbox'}</span>
